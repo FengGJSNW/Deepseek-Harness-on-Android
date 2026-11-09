@@ -1,0 +1,9 @@
+This distribution includes Mihomo v1.19.33, a separate executable distributed
+under GPL-3.0. The upstream release binaries are used without modification.
+The GPL text is included as mihomo-GPL-3.0.txt in this directory.
+
+Source: https://github.com/MetaCubeX/mihomo/tree/v1.19.33
+Release: https://github.com/MetaCubeX/mihomo/releases/tag/v1.19.33
+Build input hashes and download addresses are recorded in the source repository
+in scripts/prepare-mihomo.mjs. Other third-party notices are included in the
+application assets and documented in the source repository's NOTICE.md.

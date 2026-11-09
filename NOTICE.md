@@ -2,6 +2,7 @@
 
 Deepseek Harness 是独立的 Android 移植项目。第三方许可按其各自范围适用。
 
+- 本应用发行包包含未修改的 [Mihomo v1.19.33](https://github.com/MetaCubeX/mihomo/releases/tag/v1.19.33) Android 可执行文件，应用以独立进程运行该程序。Mihomo 采用 GPL-3.0，许可全文见 [mihomo-GPL-3.0.txt](app/src/main/assets/licenses/mihomo-GPL-3.0.txt)，对应上游源代码见 [v1.19.33 源码](https://github.com/MetaCubeX/mihomo/tree/v1.19.33)。构建脚本 `scripts/prepare-mihomo.mjs` 记录了发行文件地址及 SHA-256，并验证下载的文件。
 - DeepSeek Harness Cordis 运行时来自 [锁定的上游提交](https://github.com/deepseek-ai/deepseek-harness/tree/22ddee3792402c3e70ec5f86a63c3e3e895a2f60)。构建入口见 `scripts/build-harness.mjs`，上游许可见 [HARNESS-LICENSE.txt](app/src/main/assets/HARNESS-LICENSE.txt)。
 - AndroidX Compose、Material 3、JavaScriptEngine 和 libsu 使用 Apache-2.0。Shizuku API 使用 MIT。CommonMark、Coil、Zod 和相关依赖的声明随应用资源保留。
 - v86、musl、xterm、KaTeX 和字体的许可证位于 `app/src/main/assets/linux/`、`console/`、`math/` 和 `fonts/`。各字体的出处与校验值见 [字体清单](app/src/main/assets/fonts/manifest.json)。
