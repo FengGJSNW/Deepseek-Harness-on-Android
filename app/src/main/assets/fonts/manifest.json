@@ -1,0 +1,70 @@
+{
+  "revision": "2fe1e8c6b137fb13041a7cfca6fdcd8a910ea4dc",
+  "license": "SIL Open Font License 1.1",
+  "fonts": [
+    {
+      "family": "sourcesans3",
+      "file": "source_sans.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/2fe1e8c6b137fb13041a7cfca6fdcd8a910ea4dc/ofl/sourcesans3/SourceSans3%5Bwght%5D.ttf",
+      "sha256": "042fe2cc0b933e328410d7acbd0aa6a1873dca5aef81875f4bc214b08825c7b9",
+      "bytes": 646340,
+      "license": "sourcesans3-OFL.txt"
+    },
+    {
+      "family": "sourcesans3",
+      "file": "source_sans_italic.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/2fe1e8c6b137fb13041a7cfca6fdcd8a910ea4dc/ofl/sourcesans3/SourceSans3-Italic%5Bwght%5D.ttf",
+      "sha256": "39e3ab05ccd7cb94907c31005bb5bec1d5432f0b096a2b782976e217a540eb6c",
+      "bytes": 395372,
+      "license": "sourcesans3-OFL.txt"
+    },
+    {
+      "family": "sourceserif4",
+      "file": "source_serif.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/2fe1e8c6b137fb13041a7cfca6fdcd8a910ea4dc/ofl/sourceserif4/SourceSerif4%5Bopsz%2Cwght%5D.ttf",
+      "sha256": "97b2d4da6e3cb494b5a1e66ae176914d852ccabef49e0c02c0df25f3e39aca0b",
+      "bytes": 1209508,
+      "license": "sourceserif4-OFL.txt"
+    },
+    {
+      "family": "sourceserif4",
+      "file": "source_serif_italic.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/2fe1e8c6b137fb13041a7cfca6fdcd8a910ea4dc/ofl/sourceserif4/SourceSerif4-Italic%5Bopsz%2Cwght%5D.ttf",
+      "sha256": "15fbc7e4679489a501998c3669272637a6646388ef7e4bd77eebb5bf967a1f42",
+      "bytes": 855432,
+      "license": "sourceserif4-OFL.txt"
+    },
+    {
+      "family": "jetbrainsmono",
+      "file": "jetbrains_mono.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/2fe1e8c6b137fb13041a7cfca6fdcd8a910ea4dc/ofl/jetbrainsmono/JetBrainsMono%5Bwght%5D.ttf",
+      "sha256": "48715a42ec242c21e9f02692891e147d022299a52e48d5e413e1a942193ffeda",
+      "bytes": 187208,
+      "license": "jetbrainsmono-OFL.txt"
+    },
+    {
+      "family": "jetbrainsmono",
+      "file": "jetbrains_mono_italic.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/2fe1e8c6b137fb13041a7cfca6fdcd8a910ea4dc/ofl/jetbrainsmono/JetBrainsMono-Italic%5Bwght%5D.ttf",
+      "sha256": "85ae2a5cd3f56baf1ce1c21a851322c58e3d8fbe8e8ad4a4d090a820dd7fe558",
+      "bytes": 191556,
+      "license": "jetbrainsmono-OFL.txt"
+    },
+    {
+      "family": "notosanssc",
+      "file": "noto_sans_sc.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/2fe1e8c6b137fb13041a7cfca6fdcd8a910ea4dc/ofl/notosanssc/NotoSansSC%5Bwght%5D.ttf",
+      "sha256": "a3041811a78c361b1de50f953c805e0244951c21c5bd412f7232ef0d899af0da",
+      "bytes": 17772300,
+      "license": "notosanssc-OFL.txt"
+    },
+    {
+      "family": "notoserifsc",
+      "file": "noto_serif_sc.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/2fe1e8c6b137fb13041a7cfca6fdcd8a910ea4dc/ofl/notoserifsc/NotoSerifSC%5Bwght%5D.ttf",
+      "sha256": "050080d9255a86808f2945bffac582b31ef32bc36411ce29563b4961670c66f9",
+      "bytes": 25125512,
+      "license": "notoserifsc-OFL.txt"
+    }
+  ]
+}

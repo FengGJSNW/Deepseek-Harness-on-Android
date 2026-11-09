@@ -1,0 +1,28 @@
+@font-face {
+  font-family: DSHAMono;
+  src: url('/fonts/jetbrains_mono.ttf') format('truetype');
+  font-weight: 100 900;
+}
+@font-face {
+  font-family: DSHACjk;
+  src: url('/fonts/noto_sans_sc.ttf') format('truetype');
+  font-weight: 100 900;
+}
+html,
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #fafaf9;
+}
+#terminal {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 12px 10px;
+}
+.xterm .xterm-viewport {
+  overscroll-behavior: contain;
+}

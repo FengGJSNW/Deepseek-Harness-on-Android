@@ -1,0 +1,5 @@
+[tool.black]
+line-length = 100
+target-version = ["py313"]
+include = '\.py$'
+extend-exclude = '(upstream|node_modules|\.android|\.gradle|\.tmp|\.npm-cache|dist|qa|build)'

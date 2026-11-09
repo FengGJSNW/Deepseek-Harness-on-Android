@@ -1,0 +1,1115 @@
+{
+  "commit": "4f798ffcecf17d52cd15aaa617124c21b9784c12",
+  "rows": [
+    {
+      "fraction": 0,
+      "fill": "linear-gradient(90deg,rgb(63,140,255) 0%,rgb(63,140,255) 100%)",
+      "value": "rgb(63,140,255)",
+      "energy": 0,
+      "speed": 0.35,
+      "stars": [
+        {
+          "index": 0,
+          "top": 35,
+          "size": 2.17,
+          "brightness": 0.79,
+          "duration": 8.512704136541911,
+          "delay": -0.040479030759733525
+        },
+        {
+          "index": 1,
+          "top": 45,
+          "size": 1.26,
+          "brightness": 0.84,
+          "duration": 8.231941470610243,
+          "delay": -5.253150991720777
+        },
+        {
+          "index": 2,
+          "top": 45,
+          "size": 2.59,
+          "brightness": 0.65,
+          "duration": 8.458691556432417,
+          "delay": -2.1788729535288396
+        },
+        {
+          "index": 3,
+          "top": 55,
+          "size": 1.77,
+          "brightness": 0.86,
+          "duration": 8.432220796069927,
+          "delay": -7.429906915130592
+        },
+        {
+          "index": 4,
+          "top": 15,
+          "size": 2.68,
+          "brightness": 0.73,
+          "duration": 8.420949407560485,
+          "delay": -4.136342989471167
+        },
+        {
+          "index": 5,
+          "top": 45,
+          "size": 1.64,
+          "brightness": 0.52,
+          "duration": 8.509008549047369,
+          "delay": -0.8005903982602149
+        },
+        {
+          "index": 6,
+          "top": 15,
+          "size": 1.22,
+          "brightness": 0.95,
+          "duration": 9.062643055404937,
+          "delay": -6.452462000986918
+        },
+        {
+          "index": 7,
+          "top": 15,
+          "size": 2.45,
+          "brightness": 0.77,
+          "duration": 8.182258442363569,
+          "delay": -2.81918807046298
+        },
+        {
+          "index": 8,
+          "top": 65,
+          "size": 2.06,
+          "brightness": 0.52,
+          "duration": 9.066026665270329,
+          "delay": -8.59988359810017
+        },
+        {
+          "index": 9,
+          "top": 55,
+          "size": 1.57,
+          "brightness": 0.62,
+          "duration": 8.199003220668862,
+          "delay": -4.701640308865058
+        },
+        {
+          "index": 10,
+          "top": 75,
+          "size": 1.89,
+          "brightness": 0.54,
+          "duration": 8.963290167599917,
+          "delay": -1.6957009109024275
+        },
+        {
+          "index": 11,
+          "top": 15,
+          "size": 1.21,
+          "brightness": 0.94,
+          "duration": 8.092053868302276,
+          "delay": -6.662146468332109
+        },
+        {
+          "index": 12,
+          "top": 25,
+          "size": 2.4,
+          "brightness": 0.75,
+          "duration": 8.61050590383155,
+          "delay": -3.831670243551062
+        },
+        {
+          "index": 13,
+          "top": 25,
+          "size": 2.49,
+          "brightness": 0.52,
+          "duration": 8.374545976306711,
+          "delay": -0.46881347383225325
+        },
+        {
+          "index": 14,
+          "top": 75,
+          "size": 2.42,
+          "brightness": 0.98,
+          "duration": 8.093831866340977,
+          "delay": -5.319903440098616
+        },
+        {
+          "index": 15,
+          "top": 45,
+          "size": 2.27,
+          "brightness": 0.55,
+          "duration": 8.384275810526951,
+          "delay": -2.410593132894661
+        },
+        {
+          "index": 16,
+          "top": 85,
+          "size": 2.04,
+          "brightness": 0.63,
+          "duration": 8.028173340963466,
+          "delay": -7.365586378887088
+        },
+        {
+          "index": 17,
+          "top": 65,
+          "size": 2.73,
+          "brightness": 0.9,
+          "duration": 8.104528062790632,
+          "delay": -4.2497978763866975
+        },
+        {
+          "index": 18,
+          "top": 55,
+          "size": 1.33,
+          "brightness": 0.7,
+          "duration": 8.43174529469439,
+          "delay": -1.2474203292511492
+        },
+        {
+          "index": 19,
+          "top": 55,
+          "size": 2.32,
+          "brightness": 0.98,
+          "duration": 8.454107746801206,
+          "delay": -6.3910574445974255
+        },
+        {
+          "index": 20,
+          "top": 75,
+          "size": 1.61,
+          "brightness": 0.85,
+          "duration": 9.242825567083699,
+          "delay": -3.496666922315203
+        },
+        {
+          "index": 21,
+          "top": 35,
+          "size": 2.53,
+          "brightness": 0.62,
+          "duration": 8.648902966082096,
+          "delay": -0.05191078080950526
+        }
+      ]
+    },
+    {
+      "fraction": 0.2,
+      "fill": "linear-gradient(90deg,rgb(63,140,255) 0%,rgb(87,127,251) 100%)",
+      "value": "rgb(105,118,252)",
+      "energy": 0,
+      "speed": 0.35,
+      "stars": [
+        {
+          "index": 0,
+          "top": 35,
+          "size": 2.17,
+          "brightness": 0.79,
+          "duration": 8.512704136541911,
+          "delay": -0.040479030759733525
+        },
+        {
+          "index": 1,
+          "top": 45,
+          "size": 1.26,
+          "brightness": 0.84,
+          "duration": 8.231941470610243,
+          "delay": -5.253150991720777
+        },
+        {
+          "index": 2,
+          "top": 45,
+          "size": 2.59,
+          "brightness": 0.65,
+          "duration": 8.458691556432417,
+          "delay": -2.1788729535288396
+        },
+        {
+          "index": 3,
+          "top": 55,
+          "size": 1.77,
+          "brightness": 0.86,
+          "duration": 8.432220796069927,
+          "delay": -7.429906915130592
+        },
+        {
+          "index": 4,
+          "top": 15,
+          "size": 2.68,
+          "brightness": 0.73,
+          "duration": 8.420949407560485,
+          "delay": -4.136342989471167
+        },
+        {
+          "index": 5,
+          "top": 45,
+          "size": 1.64,
+          "brightness": 0.52,
+          "duration": 8.509008549047369,
+          "delay": -0.8005903982602149
+        },
+        {
+          "index": 6,
+          "top": 15,
+          "size": 1.22,
+          "brightness": 0.95,
+          "duration": 9.062643055404937,
+          "delay": -6.452462000986918
+        },
+        {
+          "index": 7,
+          "top": 15,
+          "size": 2.45,
+          "brightness": 0.77,
+          "duration": 8.182258442363569,
+          "delay": -2.81918807046298
+        },
+        {
+          "index": 8,
+          "top": 65,
+          "size": 2.06,
+          "brightness": 0.52,
+          "duration": 9.066026665270329,
+          "delay": -8.59988359810017
+        },
+        {
+          "index": 9,
+          "top": 55,
+          "size": 1.57,
+          "brightness": 0.62,
+          "duration": 8.199003220668862,
+          "delay": -4.701640308865058
+        },
+        {
+          "index": 10,
+          "top": 75,
+          "size": 1.89,
+          "brightness": 0.54,
+          "duration": 8.963290167599917,
+          "delay": -1.6957009109024275
+        },
+        {
+          "index": 11,
+          "top": 15,
+          "size": 1.21,
+          "brightness": 0.94,
+          "duration": 8.092053868302276,
+          "delay": -6.662146468332109
+        },
+        {
+          "index": 12,
+          "top": 25,
+          "size": 2.4,
+          "brightness": 0.75,
+          "duration": 8.61050590383155,
+          "delay": -3.831670243551062
+        },
+        {
+          "index": 13,
+          "top": 25,
+          "size": 2.49,
+          "brightness": 0.52,
+          "duration": 8.374545976306711,
+          "delay": -0.46881347383225325
+        },
+        {
+          "index": 14,
+          "top": 75,
+          "size": 2.42,
+          "brightness": 0.98,
+          "duration": 8.093831866340977,
+          "delay": -5.319903440098616
+        },
+        {
+          "index": 15,
+          "top": 45,
+          "size": 2.27,
+          "brightness": 0.55,
+          "duration": 8.384275810526951,
+          "delay": -2.410593132894661
+        },
+        {
+          "index": 16,
+          "top": 85,
+          "size": 2.04,
+          "brightness": 0.63,
+          "duration": 8.028173340963466,
+          "delay": -7.365586378887088
+        },
+        {
+          "index": 17,
+          "top": 65,
+          "size": 2.73,
+          "brightness": 0.9,
+          "duration": 8.104528062790632,
+          "delay": -4.2497978763866975
+        },
+        {
+          "index": 18,
+          "top": 55,
+          "size": 1.33,
+          "brightness": 0.7,
+          "duration": 8.43174529469439,
+          "delay": -1.2474203292511492
+        },
+        {
+          "index": 19,
+          "top": 55,
+          "size": 2.32,
+          "brightness": 0.98,
+          "duration": 8.454107746801206,
+          "delay": -6.3910574445974255
+        },
+        {
+          "index": 20,
+          "top": 75,
+          "size": 1.61,
+          "brightness": 0.85,
+          "duration": 9.242825567083699,
+          "delay": -3.496666922315203
+        },
+        {
+          "index": 21,
+          "top": 35,
+          "size": 2.53,
+          "brightness": 0.62,
+          "duration": 8.648902966082096,
+          "delay": -0.05191078080950526
+        }
+      ]
+    },
+    {
+      "fraction": 0.4,
+      "fill": "linear-gradient(90deg,rgb(63,140,255) 0%,rgb(112,114,248) 100%)",
+      "value": "rgb(147,96,249)",
+      "energy": 0.10000000000000005,
+      "speed": 0.515,
+      "stars": [
+        {
+          "index": 0,
+          "top": 35,
+          "size": 2.17,
+          "brightness": 0.79,
+          "duration": 5.785332908329455,
+          "delay": -0.02751002090467327
+        },
+        {
+          "index": 1,
+          "top": 45,
+          "size": 1.26,
+          "brightness": 0.84,
+          "duration": 5.594523329540942,
+          "delay": -3.5701026157325666
+        },
+        {
+          "index": 2,
+          "top": 45,
+          "size": 2.59,
+          "brightness": 0.65,
+          "duration": 5.748625329614264,
+          "delay": -1.4807874441458135
+        },
+        {
+          "index": 3,
+          "top": 55,
+          "size": 1.77,
+          "brightness": 0.86,
+          "duration": 5.7306354924747085,
+          "delay": -5.049451301545062
+        },
+        {
+          "index": 4,
+          "top": 15,
+          "size": 2.68,
+          "brightness": 0.73,
+          "duration": 5.722975325526543,
+          "delay": -2.8111068860483663
+        },
+        {
+          "index": 5,
+          "top": 45,
+          "size": 1.64,
+          "brightness": 0.52,
+          "duration": 5.782821344012774,
+          "delay": -0.5440905619244178
+        },
+        {
+          "index": 6,
+          "top": 15,
+          "size": 1.22,
+          "brightness": 0.95,
+          "duration": 6.159077804644132,
+          "delay": -4.385168350185284
+        },
+        {
+          "index": 7,
+          "top": 15,
+          "size": 2.45,
+          "brightness": 0.77,
+          "duration": 5.560758164713105,
+          "delay": -1.9159530575962
+        },
+        {
+          "index": 8,
+          "top": 65,
+          "size": 2.06,
+          "brightness": 0.52,
+          "duration": 6.161377345329349,
+          "delay": -5.844581086087494
+        },
+        {
+          "index": 9,
+          "top": 55,
+          "size": 1.57,
+          "brightness": 0.62,
+          "duration": 5.572138111134178,
+          "delay": -3.1952895302966415
+        },
+        {
+          "index": 10,
+          "top": 75,
+          "size": 1.89,
+          "brightness": 0.54,
+          "duration": 6.091556424582468,
+          "delay": -1.1524180947880576
+        },
+        {
+          "index": 11,
+          "top": 15,
+          "size": 1.21,
+          "brightness": 0.94,
+          "duration": 5.499454085253975,
+          "delay": -4.5276723571189095
+        },
+        {
+          "index": 12,
+          "top": 25,
+          "size": 2.4,
+          "brightness": 0.75,
+          "duration": 5.851800128817558,
+          "delay": -2.604047738335673
+        },
+        {
+          "index": 13,
+          "top": 25,
+          "size": 2.49,
+          "brightness": 0.52,
+          "duration": 5.691439013023978,
+          "delay": -0.3186110987209488
+        },
+        {
+          "index": 14,
+          "top": 75,
+          "size": 2.42,
+          "brightness": 0.98,
+          "duration": 5.5006624334356164,
+          "delay": -3.615468357348574
+        },
+        {
+          "index": 15,
+          "top": 45,
+          "size": 2.27,
+          "brightness": 0.55,
+          "duration": 5.698051521717345,
+          "delay": -1.6382671776954005
+        },
+        {
+          "index": 16,
+          "top": 85,
+          "size": 2.04,
+          "brightness": 0.63,
+          "duration": 5.456040134635365,
+          "delay": -5.0057383157485065
+        },
+        {
+          "index": 17,
+          "top": 65,
+          "size": 2.73,
+          "brightness": 0.9,
+          "duration": 5.507931693158682,
+          "delay": -2.8882121490006685
+        },
+        {
+          "index": 18,
+          "top": 55,
+          "size": 1.33,
+          "brightness": 0.7,
+          "duration": 5.73031233620007,
+          "delay": -0.8477613888114606
+        },
+        {
+          "index": 19,
+          "top": 55,
+          "size": 2.32,
+          "brightness": 0.98,
+          "duration": 5.745510119185286,
+          "delay": -4.343437098270095
+        },
+        {
+          "index": 20,
+          "top": 75,
+          "size": 1.61,
+          "brightness": 0.85,
+          "duration": 6.281531938794747,
+          "delay": -2.3763755782724685
+        },
+        {
+          "index": 21,
+          "top": 35,
+          "size": 2.53,
+          "brightness": 0.62,
+          "duration": 5.877895219667444,
+          "delay": -0.035279171423935614
+        }
+      ]
+    },
+    {
+      "fraction": 0.6,
+      "fill": "linear-gradient(90deg,rgb(63,140,255) 0%,rgb(133,103,246) 100%)",
+      "value": "rgb(159,90,247)",
+      "energy": 0.39999999999999997,
+      "speed": 1.0099999999999998,
+      "stars": [
+        {
+          "index": 0,
+          "top": 35,
+          "size": 2.17,
+          "brightness": 0.79,
+          "duration": 2.949946978009574,
+          "delay": -0.014027386896937364
+        },
+        {
+          "index": 1,
+          "top": 45,
+          "size": 1.26,
+          "brightness": 0.84,
+          "duration": 2.8526529848649362,
+          "delay": -1.8203988585171011
+        },
+        {
+          "index": 2,
+          "top": 45,
+          "size": 2.59,
+          "brightness": 0.65,
+          "duration": 2.931229747278561,
+          "delay": -0.7550549838961327
+        },
+        {
+          "index": 3,
+          "top": 55,
+          "size": 1.77,
+          "brightness": 0.86,
+          "duration": 2.9220567115093816,
+          "delay": -2.574720218114562
+        },
+        {
+          "index": 4,
+          "top": 15,
+          "size": 2.68,
+          "brightness": 0.73,
+          "duration": 2.9181507847981885,
+          "delay": -1.433386184470207
+        },
+        {
+          "index": 5,
+          "top": 45,
+          "size": 1.64,
+          "brightness": 0.52,
+          "duration": 2.9486663288778012,
+          "delay": -0.2774323162287874
+        },
+        {
+          "index": 6,
+          "top": 15,
+          "size": 1.22,
+          "brightness": 0.95,
+          "duration": 3.1405198706848796,
+          "delay": -2.236001683510318
+        },
+        {
+          "index": 7,
+          "top": 15,
+          "size": 2.45,
+          "brightness": 0.77,
+          "duration": 2.835436093888366,
+          "delay": -0.976946361051528
+        },
+        {
+          "index": 8,
+          "top": 65,
+          "size": 2.06,
+          "brightness": 0.52,
+          "duration": 3.141692408757045,
+          "delay": -2.9801576825099603
+        },
+        {
+          "index": 9,
+          "top": 55,
+          "size": 1.57,
+          "brightness": 0.62,
+          "duration": 2.841238739835745,
+          "delay": -1.629281295151258
+        },
+        {
+          "index": 10,
+          "top": 75,
+          "size": 1.89,
+          "brightness": 0.54,
+          "duration": 3.106090652138586,
+          "delay": -0.5876191275404453
+        },
+        {
+          "index": 11,
+          "top": 15,
+          "size": 1.21,
+          "brightness": 0.94,
+          "duration": 2.804177083075047,
+          "delay": -2.30866461773885
+        },
+        {
+          "index": 12,
+          "top": 25,
+          "size": 2.4,
+          "brightness": 0.75,
+          "duration": 2.9838386795455873,
+          "delay": -1.3278065200424476
+        },
+        {
+          "index": 13,
+          "top": 25,
+          "size": 2.49,
+          "brightness": 0.52,
+          "duration": 2.902070387829059,
+          "delay": -0.1624601146943452
+        },
+        {
+          "index": 14,
+          "top": 75,
+          "size": 2.42,
+          "brightness": 0.98,
+          "duration": 2.8047932210092505,
+          "delay": -1.8435308950836793
+        },
+        {
+          "index": 15,
+          "top": 45,
+          "size": 2.27,
+          "brightness": 0.55,
+          "duration": 2.905442112558845,
+          "delay": -0.8353540559535956
+        },
+        {
+          "index": 16,
+          "top": 85,
+          "size": 2.04,
+          "brightness": 0.63,
+          "duration": 2.782040266670508,
+          "delay": -2.552430923376714
+        },
+        {
+          "index": 17,
+          "top": 65,
+          "size": 2.73,
+          "brightness": 0.9,
+          "duration": 2.8084998237393286,
+          "delay": -1.4727022343914304
+        },
+        {
+          "index": 18,
+          "top": 55,
+          "size": 1.33,
+          "brightness": 0.7,
+          "duration": 2.9218919338049867,
+          "delay": -0.4322743715226755
+        },
+        {
+          "index": 19,
+          "top": 55,
+          "size": 2.32,
+          "brightness": 0.98,
+          "duration": 2.9296412983964584,
+          "delay": -2.2147228768406926
+        },
+        {
+          "index": 20,
+          "top": 75,
+          "size": 1.61,
+          "brightness": 0.85,
+          "duration": 3.2029593549299955,
+          "delay": -1.2117162602082392
+        },
+        {
+          "index": 21,
+          "top": 35,
+          "size": 2.53,
+          "brightness": 0.62,
+          "duration": 2.9971445922066673,
+          "delay": -0.01798888443893747
+        }
+      ]
+    },
+    {
+      "fraction": 0.8,
+      "fill": "linear-gradient(90deg,rgb(63,140,255) 0%,rgb(150,94,247) 100%)",
+      "value": "rgb(142,99,246)",
+      "energy": 0.7000000000000001,
+      "speed": 1.505,
+      "stars": [
+        {
+          "index": 0,
+          "top": 35,
+          "size": 2.17,
+          "brightness": 0.79,
+          "duration": 1.979698636405096,
+          "delay": -0.00941372808365896
+        },
+        {
+          "index": 1,
+          "top": 45,
+          "size": 1.26,
+          "brightness": 0.84,
+          "duration": 1.9144049931651728,
+          "delay": -1.2216630213304132
+        },
+        {
+          "index": 2,
+          "top": 45,
+          "size": 2.59,
+          "brightness": 0.65,
+          "duration": 1.967137571263353,
+          "delay": -0.5067146403555441
+        },
+        {
+          "index": 3,
+          "top": 55,
+          "size": 1.77,
+          "brightness": 0.86,
+          "duration": 1.9609815804813786,
+          "delay": -1.7278853291001377
+        },
+        {
+          "index": 4,
+          "top": 15,
+          "size": 2.68,
+          "brightness": 0.73,
+          "duration": 1.9583603273396477,
+          "delay": -0.9619402301095739
+        },
+        {
+          "index": 5,
+          "top": 45,
+          "size": 1.64,
+          "brightness": 0.52,
+          "duration": 1.9788391974528763,
+          "delay": -0.18618381354888716
+        },
+        {
+          "index": 6,
+          "top": 15,
+          "size": 1.22,
+          "brightness": 0.95,
+          "duration": 2.107591408233706,
+          "delay": -1.5005725583690506
+        },
+        {
+          "index": 7,
+          "top": 15,
+          "size": 2.45,
+          "brightness": 0.77,
+          "duration": 1.9028508005496672,
+          "delay": -0.6556251326658094
+        },
+        {
+          "index": 8,
+          "top": 65,
+          "size": 2.06,
+          "brightness": 0.52,
+          "duration": 2.1083782942489133,
+          "delay": -1.999972929790737
+        },
+        {
+          "index": 9,
+          "top": 55,
+          "size": 1.57,
+          "brightness": 0.62,
+          "duration": 1.9067449350392702,
+          "delay": -1.093404722991874
+        },
+        {
+          "index": 10,
+          "top": 75,
+          "size": 1.89,
+          "brightness": 0.54,
+          "duration": 2.084486085488353,
+          "delay": -0.3943490490470762
+        },
+        {
+          "index": 11,
+          "top": 15,
+          "size": 1.21,
+          "brightness": 0.94,
+          "duration": 1.8818729926284365,
+          "delay": -1.5493363879842115
+        },
+        {
+          "index": 12,
+          "top": 25,
+          "size": 2.4,
+          "brightness": 0.75,
+          "duration": 2.0024432334491977,
+          "delay": -0.8910861031514098
+        },
+        {
+          "index": 13,
+          "top": 25,
+          "size": 2.49,
+          "brightness": 0.52,
+          "duration": 1.947568831699235,
+          "delay": -0.10902638926331469
+        },
+        {
+          "index": 14,
+          "top": 75,
+          "size": 2.42,
+          "brightness": 0.98,
+          "duration": 1.8822864805444135,
+          "delay": -1.237186846534562
+        },
+        {
+          "index": 15,
+          "top": 45,
+          "size": 2.27,
+          "brightness": 0.55,
+          "duration": 1.949831583843477,
+          "delay": -0.5606030541615491
+        },
+        {
+          "index": 16,
+          "top": 85,
+          "size": 2.04,
+          "brightness": 0.63,
+          "duration": 1.8670170560380153,
+          "delay": -1.7129270648574624
+        },
+        {
+          "index": 17,
+          "top": 65,
+          "size": 2.73,
+          "brightness": 0.9,
+          "duration": 1.8847739680908446,
+          "delay": -0.9883250875317902
+        },
+        {
+          "index": 18,
+          "top": 55,
+          "size": 1.33,
+          "brightness": 0.7,
+          "duration": 1.960870998766137,
+          "delay": -0.2900977509886394
+        },
+        {
+          "index": 19,
+          "top": 55,
+          "size": 2.32,
+          "brightness": 0.98,
+          "duration": 1.9660715690235364,
+          "delay": -1.4862924289761454
+        },
+        {
+          "index": 20,
+          "top": 75,
+          "size": 1.61,
+          "brightness": 0.85,
+          "duration": 2.149494317926442,
+          "delay": -0.8131783540267916
+        },
+        {
+          "index": 21,
+          "top": 35,
+          "size": 2.53,
+          "brightness": 0.62,
+          "duration": 2.0113727828097896,
+          "delay": -0.012072274606861689
+        }
+      ]
+    },
+    {
+      "fraction": 1,
+      "fill": "linear-gradient(90deg,rgb(63,140,255) 0%,rgb(168,85,247) 100%)",
+      "value": "rgb(124,108,246)",
+      "energy": 1,
+      "speed": 2,
+      "stars": [
+        {
+          "index": 0,
+          "top": 35,
+          "size": 2.17,
+          "brightness": 0.79,
+          "duration": 1.4897232238948346,
+          "delay": -0.007083830382953367
+        },
+        {
+          "index": 1,
+          "top": 45,
+          "size": 1.26,
+          "brightness": 0.84,
+          "duration": 1.4405897573567925,
+          "delay": -0.919301423551136
+        },
+        {
+          "index": 2,
+          "top": 45,
+          "size": 2.59,
+          "brightness": 0.65,
+          "duration": 1.480271022375673,
+          "delay": -0.38130276686754694
+        },
+        {
+          "index": 3,
+          "top": 55,
+          "size": 1.77,
+          "brightness": 0.86,
+          "duration": 1.4756386393122374,
+          "delay": -1.3002337101478536
+        },
+        {
+          "index": 4,
+          "top": 15,
+          "size": 2.68,
+          "brightness": 0.73,
+          "duration": 1.473666146323085,
+          "delay": -0.7238600231574543
+        },
+        {
+          "index": 5,
+          "top": 45,
+          "size": 1.64,
+          "brightness": 0.52,
+          "duration": 1.4890764960832894,
+          "delay": -0.1401033196955376
+        },
+        {
+          "index": 6,
+          "top": 15,
+          "size": 1.22,
+          "brightness": 0.95,
+          "duration": 1.585962534695864,
+          "delay": -1.1291808501727105
+        },
+        {
+          "index": 7,
+          "top": 15,
+          "size": 2.45,
+          "brightness": 0.77,
+          "duration": 1.4318952274136245,
+          "delay": -0.4933579123310215
+        },
+        {
+          "index": 8,
+          "top": 65,
+          "size": 2.06,
+          "brightness": 0.52,
+          "duration": 1.5865546664223074,
+          "delay": -1.5049796296675297
+        },
+        {
+          "index": 9,
+          "top": 55,
+          "size": 1.57,
+          "brightness": 0.62,
+          "duration": 1.4348255636170508,
+          "delay": -0.8227870540513852
+        },
+        {
+          "index": 10,
+          "top": 75,
+          "size": 1.89,
+          "brightness": 0.54,
+          "duration": 1.5685757793299855,
+          "delay": -0.2967476594079248
+        },
+        {
+          "index": 11,
+          "top": 15,
+          "size": 1.21,
+          "brightness": 0.94,
+          "duration": 1.4161094269528984,
+          "delay": -1.1658756319581192
+        },
+        {
+          "index": 12,
+          "top": 25,
+          "size": 2.4,
+          "brightness": 0.75,
+          "duration": 1.5068385331705212,
+          "delay": -0.6705422926214358
+        },
+        {
+          "index": 13,
+          "top": 25,
+          "size": 2.49,
+          "brightness": 0.52,
+          "duration": 1.4655455458536744,
+          "delay": -0.08204235792064431
+        },
+        {
+          "index": 14,
+          "top": 75,
+          "size": 2.42,
+          "brightness": 0.98,
+          "duration": 1.4164205766096711,
+          "delay": -0.9309831020172579
+        },
+        {
+          "index": 15,
+          "top": 45,
+          "size": 2.27,
+          "brightness": 0.55,
+          "duration": 1.4672482668422164,
+          "delay": -0.42185379825656566
+        },
+        {
+          "index": 16,
+          "top": 85,
+          "size": 2.04,
+          "brightness": 0.63,
+          "duration": 1.4049303346686064,
+          "delay": -1.2889776163052402
+        },
+        {
+          "index": 17,
+          "top": 65,
+          "size": 2.73,
+          "brightness": 0.9,
+          "duration": 1.4182924109883606,
+          "delay": -0.7437146283676721
+        },
+        {
+          "index": 18,
+          "top": 55,
+          "size": 1.33,
+          "brightness": 0.7,
+          "duration": 1.475555426571518,
+          "delay": -0.21829855761895112
+        },
+        {
+          "index": 19,
+          "top": 55,
+          "size": 2.32,
+          "brightness": 0.98,
+          "duration": 1.4794688556902111,
+          "delay": -1.1184350528045495
+        },
+        {
+          "index": 20,
+          "top": 75,
+          "size": 1.61,
+          "brightness": 0.85,
+          "duration": 1.6174944742396473,
+          "delay": -0.6119167114051606
+        },
+        {
+          "index": 21,
+          "top": 35,
+          "size": 2.53,
+          "brightness": 0.62,
+          "duration": 1.5135580190643667,
+          "delay": -0.00908438664166342
+        }
+      ]
+    }
+  ]
+}

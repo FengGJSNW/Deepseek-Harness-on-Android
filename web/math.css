@@ -1,0 +1,363 @@
+@font-face {
+  font-display: swap;
+  font-family: DSHACjkSerif;
+  src: url('/fonts/noto_serif_sc.ttf');
+  font-style: italic;
+  font-weight: 100 900;
+}
+@font-face {
+  font-display: swap;
+  font-family: DSHACjk;
+  src: url('/fonts/noto_sans_sc.ttf');
+  font-style: italic;
+  font-weight: 100 900;
+}
+@font-face {
+  font-display: swap;
+  font-family: DSHAMono;
+  src: url('/fonts/jetbrains_mono_italic.ttf');
+  font-style: italic;
+  font-weight: 100 900;
+}
+@font-face {
+  font-display: swap;
+  font-family: DSHASerif;
+  src: url('/fonts/source_serif_italic.ttf');
+  font-style: italic;
+  font-weight: 100 900;
+}
+@font-face {
+  font-display: swap;
+  font-family: DSHASans;
+  src: url('/fonts/source_sans_italic.ttf');
+  font-style: italic;
+  font-weight: 100 900;
+}
+@font-face {
+  font-display: swap;
+  font-family: DSHASans;
+  src: url('/fonts/source_sans.ttf');
+  font-weight: 100 900;
+}
+@font-face {
+  font-display: swap;
+  font-family: DSHASerif;
+  src: url('/fonts/source_serif.ttf');
+  font-weight: 100 900;
+}
+@font-face {
+  font-display: swap;
+  font-family: DSHAMono;
+  src: url('/fonts/jetbrains_mono.ttf');
+  font-weight: 100 900;
+}
+@font-face {
+  font-display: swap;
+  font-family: DSHACjk;
+  src: url('/fonts/noto_sans_sc.ttf');
+  font-weight: 100 900;
+}
+@font-face {
+  font-display: swap;
+  font-family: DSHACjkSerif;
+  src: url('/fonts/noto_serif_sc.ttf');
+  font-weight: 100 900;
+}
+
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  color: #292824;
+  overflow-x: hidden;
+}
+body {
+  font:
+    15px/1.4 DSHASerif,
+    DSHACjkSerif,
+    serif;
+  overflow-wrap: anywhere;
+}
+article > :first-child {
+  margin-top: 0;
+}
+article > :last-child {
+  margin-bottom: 0;
+}
+p {
+  margin: 9px 0 0;
+}
+h1,
+h2,
+h3,
+h4 {
+  font-weight: 580;
+  line-height: 1.4;
+  margin: 22px 0 0;
+}
+h1 {
+  font-size: 1.267em;
+}
+h2 {
+  font-size: 1.133em;
+}
+h3 {
+  font-size: 1.067em;
+}
+h4 {
+  font-size: 1em;
+}
+strong,
+b {
+  font-weight: 600;
+}
+a {
+  color: #326b92;
+  text-decoration: underline;
+  text-decoration-thickness: 0.6px;
+  text-underline-offset: 3px;
+}
+blockquote {
+  border-left: 2px solid #e5e3df;
+  margin: 15px 0 0 5px;
+  padding: 0 0 0 14px;
+  color: #77756f;
+}
+blockquote > :first-child {
+  margin-top: 0;
+}
+ul,
+ol {
+  padding-left: 24px;
+  margin: 10px 0 0;
+}
+li {
+  margin: 5px 0;
+  padding-left: 4px;
+}
+li > p {
+  margin: 0;
+}
+li::marker {
+  color: #77756f;
+}
+li:has(> input:checked),
+li:has(> p > input:checked) {
+  color: #77756f;
+  text-decoration: line-through;
+}
+hr {
+  border: 0;
+  border-top: 0.75px solid #e5e3df;
+  margin: 24px 0 14px;
+}
+code {
+  font:
+    0.9em DSHAMono,
+    DSHACjk,
+    monospace;
+  background: #f1f0ed;
+  border: 0.5px solid #e5e3df;
+  border-radius: 3px;
+  padding: 1px 3px;
+}
+pre {
+  position: relative;
+  margin: 12px 0 0;
+  padding: 0;
+  isolation: isolate;
+}
+pre > code {
+  display: block;
+  position: relative;
+  z-index: 1;
+  white-space: pre;
+  overflow: auto;
+  max-height: 360px;
+  padding: 3px 14px 14px;
+  font-size: 0.867em;
+  background: none;
+  border: 0;
+  border-radius: 0;
+  line-height: 1.6;
+}
+.card-backdrop {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: -1;
+  pointer-events: none;
+}
+.code-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 32px;
+  padding: 0 8px 0 14px;
+  font:
+    0.667em DSHASans,
+    DSHACjk,
+    sans-serif;
+  color: #777;
+}
+.code-language {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.code-header svg {
+  width: 15px;
+  height: 15px;
+}
+.code-header button {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 32px;
+  min-width: 32px;
+  padding: 0 8px;
+  color: #676767;
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  font: inherit;
+  cursor: pointer;
+}
+.code-header button:hover {
+  background: #00000008;
+}
+.table-card {
+  position: relative;
+  isolation: isolate;
+  margin: 12px 0 0;
+}
+.table-scroll {
+  overflow: auto;
+  max-height: 360px;
+}
+table {
+  border-collapse: separate;
+  border-spacing: 0;
+  min-width: 100%;
+  font-size: 0.967em;
+  line-height: 1.4;
+}
+th,
+td {
+  border: 0;
+  padding: calc(0.4375em + 1px) 0;
+  text-align: left;
+  vertical-align: top;
+  min-width: 76px;
+}
+/* Claude cached reply override: open edges and column spacing, retain horizontal rules. */
+th + th,
+td + td {
+  padding-inline-start: 1.5em;
+}
+th {
+  background: transparent;
+  font-weight: 580;
+  border-bottom: 1px solid #e5e3df;
+}
+tbody tr + tr td {
+  border-top: 1px solid #e5e3df;
+}
+th code,
+td code {
+  overflow-wrap: normal;
+}
+.katex {
+  font-size: 1.1em;
+}
+.katex-display {
+  margin: 16px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 4px 0;
+}
+img {
+  display: none;
+}
+.math-error {
+  color: #a66c34;
+}
+input[type='checkbox'] {
+  appearance: none;
+  width: 13px;
+  height: 13px;
+  margin: 0 7px 0 -20px;
+  border: 1px solid #aaa79f;
+  border-radius: 3px;
+  vertical-align: middle;
+  pointer-events: none;
+}
+input[type='checkbox']:checked {
+  background: #88857d;
+  border-color: #88857d;
+  position: relative;
+}
+input[type='checkbox']:checked::after {
+  content: '';
+  position: absolute;
+  inset: 2px;
+  background: white;
+  clip-path: polygon(0 45%, 15% 30%, 40% 55%, 85% 5%, 100% 20%, 40% 90%);
+}
+
+th[align='right'],
+td[align='right'] {
+  text-align: right;
+}
+th[align='center'],
+td[align='center'] {
+  text-align: center;
+}
+
+p,
+blockquote {
+  text-wrap: pretty;
+}
+th,
+td {
+  text-wrap: balance;
+}
+h1,
+h2,
+h3 {
+  text-wrap: balance;
+}
+
+/* Emoji and symbols never inherit global italics or an enclosing emphasis span. */
+.upright-symbol {
+  font-style: normal !important;
+  font-family: 'Noto Color Emoji', system-ui, sans-serif;
+  font-synthesis: none;
+}
+
+.table-scroll::-webkit-scrollbar,
+pre > code::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+.table-scroll::-webkit-scrollbar-track,
+pre > code::-webkit-scrollbar-track,
+.table-scroll::-webkit-scrollbar-corner,
+pre > code::-webkit-scrollbar-corner {
+  background: transparent;
+}
+.table-scroll::-webkit-scrollbar-thumb,
+pre > code::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 4px;
+  transition: background-color 220ms ease-out;
+}
+.table-scroll.scrollbars-active::-webkit-scrollbar-thumb,
+pre > code.scrollbars-active::-webkit-scrollbar-thumb {
+  background: #77756fa6;
+}

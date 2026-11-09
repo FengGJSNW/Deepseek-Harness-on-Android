@@ -1,0 +1,56 @@
+# Android SDK, Gradle, IDE, and machine-local configuration
+/local.properties
+/.android/
+/.idea/
+*.iml
+/.vscode/
+.gradle/
+.kotlin/
+.cxx/
+.externalNativeBuild/
+build/
+
+# Signing material, credentials, and local overrides
+*.keystore
+*.jks
+*.key
+*.p12
+*.pfx
+signing.properties
+keystore.properties
+secrets.properties
+secrets.json
+credentials.json
+.env
+.env.*
+*.env
+*.env.local
+!.env.example
+!.env.sample
+
+# Dependencies and build or delivery output
+/upstream/
+node_modules/
+/.npm-cache/
+/.tmp/
+/dist/
+*.apk
+*.aab
+*.apks
+__pycache__/
+*.py[cod]
+
+# Private test evidence, device data, and saved third-party pages
+/private/
+/qa/
+/resourse/
+/docs/diagrams/
+/design-references/official-apk/
+*.log
+*.har
+*.hprof
+
+# OS metadata
+._*
+.DS_Store
+Thumbs.db

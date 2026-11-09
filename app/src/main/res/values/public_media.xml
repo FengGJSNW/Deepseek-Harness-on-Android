@@ -1,0 +1,20 @@
+<resources>
+    <item type="drawable" name="meme_ciallo">@drawable/dsha_public_whale</item>
+    <item type="drawable" name="meme_cute">@drawable/dsha_public_whale</item>
+    <item type="drawable" name="meme_full">@drawable/dsha_public_whale</item>
+    <item type="drawable" name="meme_ohjing">@drawable/dsha_public_whale</item>
+    <item type="drawable" name="meme_opensource">@drawable/dsha_public_whale</item>
+    <item type="drawable" name="meme_pressure">@drawable/dsha_public_whale</item>
+    <item type="drawable" name="meme_rice">@drawable/dsha_public_whale</item>
+    <item type="drawable" name="meme_sleep">@drawable/dsha_public_whale</item>
+    <item type="drawable" name="meme_vision">@drawable/dsha_public_whale</item>
+    <item type="drawable" name="pet_done">@drawable/agent_running_whale</item>
+    <item type="drawable" name="pet_error">@drawable/agent_running_whale</item>
+    <item type="drawable" name="pet_happy">@drawable/agent_running_whale</item>
+    <item type="drawable" name="pet_idle">@drawable/agent_running_whale</item>
+    <item type="drawable" name="pet_sleep">@drawable/agent_running_whale</item>
+    <item type="drawable" name="pet_think">@drawable/agent_running_whale</item>
+    <item type="drawable" name="pet_wave">@drawable/agent_running_whale</item>
+    <item type="drawable" name="whale_chibi">@drawable/dsha_public_whale</item>
+    <item type="drawable" name="whale_chibi_expanded">@drawable/dsha_public_whale</item>
+</resources>

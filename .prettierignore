@@ -1,0 +1,13 @@
+upstream/
+node_modules/
+.android/
+.gradle/
+.tmp/
+.npm-cache/
+dist/
+qa/
+app/build/
+control-lab/build/
+app/src/main/assets/*
+!app/src/main/assets/app.js
+!app/src/main/assets/index.html

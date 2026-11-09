@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Deepseek Harness</string>
+    <string name="accessibility_description">在你主动发起任务期间，读取当前屏幕文字和截图，并执行点击、滑动、输入及应用导航。界面数据会发送到 DeepSeek API 供模型理解。API Key 保存在本机加密存储中。你可随时通过应用或通知栏停止任务，或在系统设置中关闭此服务。不会绕过锁屏或受保护窗口。</string>
+</resources>

@@ -1,0 +1,10 @@
+* text=auto eol=lf
+*.bat text eol=crlf
+*.jar -text
+*.png -text
+*.wav -text
+*.webp -text
+*.wasm -text
+*.woff -text
+*.woff2 -text
+*.ttf -text

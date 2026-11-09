@@ -1,0 +1,8 @@
+{
+  "source": "https://github.com/phamfoo/figma-squircle",
+  "commit": "45622dc2e9b23d69a44be673d15d1152c50df8d8",
+  "license": "CONTINUOUS-CORNER-LICENSE.txt",
+  "preset": "Figma iOS",
+  "smoothing": 0.6,
+  "documentation": "https://help.figma.com/hc/en-us/articles/360050986854-Adjust-corner-radius-and-smoothing"
+}
