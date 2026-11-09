@@ -77,6 +77,8 @@ class AgentService : Service() {
 
     private var terminalApproval: CompletableDeferred<String>? = null
     private var wake: android.os.PowerManager.WakeLock? = null
+    private var keepAliveJob: Job? = null
+    private var permissionPromptTask = ""
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -105,6 +107,10 @@ class AgentService : Service() {
         getSystemService(NotificationManager::class.java)
             .createNotificationChannel(
                 NotificationChannel("events", "任务消息与确认", NotificationManager.IMPORTANCE_DEFAULT),
+            )
+        getSystemService(NotificationManager::class.java)
+            .createNotificationChannel(
+                NotificationChannel("task-review", "任务审查与提问", NotificationManager.IMPORTANCE_HIGH),
             )
         loadEngine()
     }
@@ -255,7 +261,7 @@ class AgentService : Service() {
             stopTask()
             stopSelf()
         }
-        return START_NOT_STICKY
+        return if (intent?.action == "QUIT") START_NOT_STICKY else START_STICKY
     }
 
     private fun notification(text: String): Notification {
@@ -330,8 +336,54 @@ class AgentService : Service() {
     }
 
     private fun releaseWake() {
+        keepAliveJob?.cancel()
+        keepAliveJob = null
         wake?.let { if (it.isHeld) it.release() }
         wake = null
+    }
+
+    private fun keepTaskRunning(task: PhoneTask) {
+        releaseWake()
+        val manager = getSystemService(android.os.PowerManager::class.java)
+        val level =
+            TerminalLevel.of(
+                runCatching { JSONObject(task.terminalConfig).optString("level") }.getOrDefault(""),
+            )
+        keepAliveJob = scope.launch {
+            while (AssistantState.running === task) {
+                if (ExperienceSettings.keepTasksAwake) {
+                    val lock =
+                        wake
+                            ?: manager
+                                .newWakeLock(
+                                    android.os.PowerManager.PARTIAL_WAKE_LOCK,
+                                    "$packageName:agent-task",
+                                )
+                                .also {
+                                    it.setReferenceCounted(false)
+                                    wake = it
+                                }
+                    lock.acquire(120_000L)
+                } else {
+                    wake?.let { if (it.isHeld) it.release() }
+                    wake = null
+                }
+                if (
+                    ExperienceSettings.privilegedKeepAlive &&
+                        level.canManageOwnPermissions &&
+                        terminal.connections.state(level).ready
+                ) {
+                    try {
+                        terminal.connections.ownAppAction(level, "keep_awake")
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        // This Android build may restrict the temporary allowlist to system UID.
+                    }
+                }
+                delay(90_000)
+            }
+        }
     }
 
     private fun emit(type: String, value: Any) {
@@ -569,7 +621,7 @@ class AgentService : Service() {
                 terminalConfig = terminal.config.load(c.terminalLevel).json().toString(),
                 projectId = c.projectId,
                 files = c.files.toList(),
-                browserProvider = c.browserProvider.key,
+                browserProvider = ExperienceSettings.browserMode.key,
                 creatorMode = c.creatorMode,
             )
         if (c.messages.isEmpty()) c.title = actual.take(24)
@@ -628,6 +680,7 @@ class AgentService : Service() {
         AssistantState.activeTaskId = task.id
         task.status = "running"
         task.progress = "正在思考"
+        keepTaskRunning(task)
         AssistantState.persist()
         floating.update()
         scope.launch {
@@ -638,7 +691,7 @@ class AgentService : Service() {
             }
             if (AssistantState.activeTaskId == task.id && task.status == "running")
                 webView.evaluateJavascript(
-                    "window.runTask(${task.json().put("browserTools", ExperienceSettings.browserEnabled).put("maxAgents", ExperienceSettings.maxAgents).put("proxyTools", mihomo.state.value.let { it.agentNodes || it.agentRules })})",
+                    "window.runTask(${task.json().put("browserTools", ExperienceSettings.browserEnabled).put("maxAgents", ExperienceSettings.maxAgents).put("proxyTools", mihomo.state.value.let { it.agentStart || it.agentNodes || it.agentRules })})",
                     null,
                 )
         }
@@ -776,12 +829,13 @@ class AgentService : Service() {
             when (t.status) {
                 "cancelled" -> "任务已中断"
                 "failed" -> "执行失败"
-                else -> "本轮已结束"
+                else -> "任务已完成"
             }
         t.question = ""
         t.approval = false
         active = false
         AssistantState.activeTaskId = ""
+        releaseWake()
         AssistantState.persist()
         WhaleCompanion.react(
             if (t.status == "done") "done" else if (t.status == "failed") "error" else "cancelled",
@@ -793,6 +847,8 @@ class AgentService : Service() {
             if (t.status == "done") R.drawable.meme_cute else 0,
         )
         notifyEvent(t, t.progress)
+        if (MainActivity.inForeground || !hasDevicePermission("notifications"))
+            AssistantState.error = t.progress
         floating.update()
         pump()
     }
@@ -858,8 +914,12 @@ class AgentService : Service() {
                 intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
+        val channel =
+            if (task.status == "waiting" && !MainActivity.inForeground && !floating.hasReviewWindow)
+                "task-review"
+            else "events"
         val builder =
-            Notification.Builder(this, "events")
+            Notification.Builder(this, channel)
                 .setSmallIcon(R.drawable.ic_notification)
                 .setContentTitle("DSHA")
                 .setContentText(message)
@@ -925,8 +985,8 @@ class AgentService : Service() {
         AssistantState.overlay = android.provider.Settings.canDrawOverlays(this)
         if (getSharedPreferences("ui", 0).getBoolean("floating", false) && AssistantState.overlay) {
             floating.show()
-            floating.update()
         } else floating.hide()
+        floating.update()
     }
 
     internal suspend fun <T> withoutPhonePanels(block: suspend () -> T): T =
@@ -1175,10 +1235,12 @@ class AgentService : Service() {
         val officialWeb = OfficialWebTool.fromMethod(method)
         val browser = method.startsWith("browser_")
         if (browser) {
-            check(ExperienceSettings.browserEnabled) { "浏览器工具已关闭" }
-            val required =
-                if (officialWeb != null) BrowserProvider.OFFICIAL else BrowserProvider.LOCAL
-            check(t.browserProvider == required.key) { "本任务没有启用${required.label}浏览工具" }
+            check(
+                ExperienceSettings.browserMode.allows(officialWeb) &&
+                    BrowserProvider.parse(t.browserProvider).allows(officialWeb),
+            ) {
+                "当前浏览器档位没有启用此工具"
+            }
         }
         val officialRequest = officialWeb?.request(args)
         val capability =
@@ -1377,8 +1439,11 @@ class AgentService : Service() {
         reason: String,
         detail: String,
         epoch: Long,
+        devicePermission: Boolean = false,
     ) = approvalLock.withLock {
-        check(task.access == "ask") { "此操作需要独立授权，当前执行模式不会请求确认：$reason" }
+        check(task.access == "ask" || devicePermission && task.access !in setOf("none", "read")) {
+            "此操作需要独立授权，当前执行模式不会请求确认：$reason"
+        }
         assertActive(epoch)
         val pending = CompletableDeferred<Boolean>()
         approval = pending
@@ -1506,6 +1571,34 @@ class AgentService : Service() {
         epoch: Long,
     ): Any {
         if (method in taskMethods) authorize(method, args, epoch)
+        if (
+            method in
+                setOf("observe", "tap", "long_press", "swipe", "input_text", "global_action") &&
+                !hasDevicePermission("accessibility")
+        ) {
+            val task = AssistantState.running
+            if (task != null && permissionPromptTask != task.id) {
+                val level =
+                    TerminalLevel.of(
+                        runCatching { JSONObject(task.terminalConfig).optString("level") }
+                            .getOrDefault(""),
+                    )
+                if (level.canManageOwnPermissions && terminal.connections.state(level).ready) {
+                    permissionPromptTask = task.id
+                    requestCapability(
+                        task,
+                        "开启本应用的无障碍服务？",
+                        "使用已连接的 ${level.title}。仅开启 DSHA 手机助手。",
+                        epoch,
+                        devicePermission = true,
+                    )
+                    terminal.connections.ownAppAction(level, "accessibility")
+                    withTimeout(3000) {
+                        while (!hasDevicePermission("accessibility")) delay(100)
+                    }
+                }
+            }
+        }
         return when (method) {
             "attachment_context" ->
                 withContext(Dispatchers.IO) {
@@ -1620,6 +1713,18 @@ class AgentService : Service() {
                                     .also { startHookContexts[task.id] = it }
                         }
                         startup.put("hookContext", extra)
+                        startup.put(
+                            "browserShared",
+                            JSONArray(
+                                BrowserState.tabs
+                                    .filter {
+                                        it.sessionId == task.sessionId &&
+                                            !it.userOwned &&
+                                            it.userAccess
+                                    }
+                                    .map { it.id },
+                            ),
+                        )
                     }
             }
             "memory_search" ->
@@ -2561,7 +2666,7 @@ class AgentService : Service() {
         epoch: Long,
     ): JSONObject {
         val task = AssistantState.running ?: error("任务已停止")
-        check(ExperienceSettings.browserEnabled) { "浏览器工具已关闭" }
+        check(ExperienceSettings.browserMode.official) { "官方浏览工具已关闭" }
         val request = tool.request(args)
         val permissions = terminal.harness.permissions
         val context = terminal.harness.context(task)

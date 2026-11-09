@@ -39,7 +39,6 @@ class PhoneObservationPrivacyTest : TestCase() {
                 Intent(ins.targetContext, MainActivity::class.java)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
             ) as MainActivity
-        assertTrue(Settings.canDrawOverlays(activity))
         waitFor { AssistantState.ready && AgentService.current != null }
         if (PhoneAccessibility.current == null) {
             val configured = shell("settings get secure enabled_accessibility_services")
@@ -95,7 +94,6 @@ class PhoneObservationPrivacyTest : TestCase() {
             val baseline = observe()
             assertEquals("com.android.settings", baseline.optString("package"))
             assertTrue(baseline.toString(), baseline.has("image"))
-            ins.runOnMainSync { service.setFloating(true) }
             Thread.sleep(500)
             lateinit var review: android.view.View
             ins.runOnMainSync {
@@ -104,9 +102,8 @@ class PhoneObservationPrivacyTest : TestCase() {
                         it.isShown &&
                             (it.layoutParams as? WindowManager.LayoutParams)?.let { params ->
                                 params.type ==
-                                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY &&
-                                    params.gravity and Gravity.VERTICAL_GRAVITY_MASK ==
-                                        Gravity.BOTTOM
+                                    WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY &&
+                                    params.gravity and Gravity.VERTICAL_GRAVITY_MASK == Gravity.TOP
                             } == true
                     }
                 assertTrue(

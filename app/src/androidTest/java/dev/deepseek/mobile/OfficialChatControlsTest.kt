@@ -73,6 +73,25 @@ class OfficialChatControlsTest {
     }
 
     @Test
+    fun officialReasoningIsSeparateAndRemainsReadableAfterDomCollapse() {
+        ready()
+        js(
+            """document.querySelector('.ds-assistant-message-main-content').insertAdjacentHTML('afterbegin',
+            '<div class="ds-think"><div class="ds-think-content">独立思考内容</div></div>')""",
+        )
+        ui.waitUntil(10000) {
+            OfficialChatNavigation.snapshot.messages.any {
+                it.reasoning == "独立思考内容" && it.text == "官方旧回复1"
+            }
+        }
+        ui.onNodeWithText("思考过程", substring = true).performClick()
+        ui.onNodeWithText("独立思考内容").assertIsDisplayed()
+        js("document.querySelector('.ds-think').remove()")
+        ui.waitForIdle()
+        ui.onNodeWithText("独立思考内容").assertIsDisplayed()
+    }
+
+    @Test
     fun newUserMarkupAndUnknownHistoryDoNotDisableNativeSendingAndModesMatchDom() {
         ready()
         assertFalse(OfficialChatNavigation.snapshot.unsupported)

@@ -43,6 +43,14 @@ object ShellWorkerMain {
                             "start" -> worker.start(argument)
                             "poll" -> worker.poll(argument)
                             "probe" -> worker.readOnlyProbe()
+                            "app-system" -> {
+                                val parameters = JSONObject(argument)
+                                worker.appSystemAction(
+                                    parameters.getString("action"),
+                                    parameters.getInt("user"),
+                                )
+                                ""
+                            }
                             "cancel" -> {
                                 worker.cancel(argument)
                                 ""

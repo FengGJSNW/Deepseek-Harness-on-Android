@@ -87,6 +87,8 @@ test('browser provider offers only the selected tools and sends official results
   for (const [options, expected] of [
     [{}, local],
     [{ browserProvider: 'official' }, ['browser_fetch', 'browser_search']],
+    [{ browserProvider: 'both' }, [...local, 'browser_fetch', 'browser_search'].sort()],
+    [{ browserProvider: 'blocked' }, []],
     [{ browserProvider: 'official', browserTools: false }, []],
     [{ browserProvider: 'official', access: 'none' }, []],
   ]) {

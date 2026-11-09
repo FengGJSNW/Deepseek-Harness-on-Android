@@ -98,7 +98,6 @@ internal fun OfficialBrowserWorkspace(conversation: Conversation, requested: Str
     var selectedId by rememberSaveable(conversation.id, requested) { mutableStateOf(requested) }
     val selected = records.firstOrNull { it.id == selectedId }
     Column(Modifier.fillMaxSize().testTag("workspace-official-browser")) {
-        BrowserProviderButtons(conversation, BrowserProvider.OFFICIAL)
         if (selected == null) {
             Column(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 12.dp)) {
                 Text("DeepSeek 网页搜索与抓取", fontSize = 17.sp, fontWeight = FontWeight.Medium)

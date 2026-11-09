@@ -18,9 +18,7 @@ import androidx.compose.ui.unit.sp
 import dev.deepseek.mobile.harness.PermissionContext
 import dev.deepseek.mobile.terminal.TerminalLevel
 import dev.deepseek.mobile.terminal.TerminalRun
-import dev.deepseek.mobile.terminal.TerminalSnapshot
 import kotlinx.coroutines.*
-import org.json.JSONObject
 
 @Composable
 internal fun WorkspaceTerminal(conversation: Conversation) {
@@ -28,16 +26,8 @@ internal fun WorkspaceTerminal(conversation: Conversation) {
         LocalTerminalPane(conversation)
         return
     }
-    val task = AssistantState.running?.takeIf { it.sessionId == conversation.id }
-    val level =
-        TerminalLevel.of(
-            task?.let {
-                runCatching { JSONObject(it.terminalConfig).getString("level") }.getOrNull()
-            } ?: conversation.terminalLevel,
-        )
-    val enabled =
-        (task?.terminalEnabled ?: conversation.terminalEnabled) &&
-            (task?.access ?: conversation.access) !in setOf("none", "read")
+    val level = TerminalLevel.of(conversation.terminalLevel)
+    val enabled = conversation.terminalEnabled && conversation.access !in setOf("none", "read")
     val manager = AgentService.current?.terminal
     val focus = LocalFocusManager.current
     val scope = rememberCoroutineScope()
@@ -164,30 +154,21 @@ internal fun WorkspaceTerminal(conversation: Conversation) {
                                 try {
                                     val snapshot =
                                         withContext(Dispatchers.IO) {
-                                            task?.let {
-                                                runCatching {
-                                                    TerminalSnapshot.from(
-                                                        JSONObject(it.terminalConfig),
-                                                    )
-                                                }
-                                                    .getOrNull()
-                                            } ?: terminal.config.load(level.key)
+                                            terminal.config.load(level.key)
                                         }
                                     val request =
                                         PhoneTask(
                                             sessionId = conversation.id,
-                                            projectId = task?.projectId ?: conversation.projectId,
+                                            projectId = conversation.projectId,
                                             text = "用户终端",
                                             images = emptyList(),
                                             model = conversation.model,
                                             effort = "low",
-                                            access = task?.access ?: conversation.access,
+                                            access = conversation.access,
                                             phoneTools = false,
-                                            fileTools = task?.fileTools ?: conversation.fileTools,
-                                            workspace = task?.workspace ?: conversation.workspace,
-                                            terminalEnabled =
-                                                task?.terminalEnabled
-                                                    ?: conversation.terminalEnabled,
+                                            fileTools = conversation.fileTools,
+                                            workspace = conversation.workspace,
+                                            terminalEnabled = conversation.terminalEnabled,
                                             terminalConfig = snapshot.json().toString(),
                                         )
                                     val result =

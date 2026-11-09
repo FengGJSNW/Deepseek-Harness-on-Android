@@ -20,6 +20,9 @@ internal data class ProxyProfile(
     val rules: List<String> = emptyList(),
     val updatedAt: Long = System.currentTimeMillis(),
     val mode: String = "",
+    val selectedNodes: Map<String, String> = emptyMap(),
+    val ruleOverrides: Map<String, String> = emptyMap(),
+    val removedRules: Set<String> = emptySet(),
 ) {
     fun json() =
         JSONObject()
@@ -30,10 +33,20 @@ internal data class ProxyProfile(
             .put("rules", JSONArray(rules))
             .put("updatedAt", updatedAt)
             .put("mode", mode)
+            .put("selectedNodes", JSONObject(selectedNodes))
+            .put("ruleOverrides", JSONObject(ruleOverrides))
+            .put("removedRules", JSONArray(removedRules))
 
     companion object {
         fun parse(row: JSONObject): ProxyProfile {
             val rules = row.optJSONArray("rules") ?: JSONArray()
+            fun mapping(key: String): Map<String, String> =
+                row.optJSONObject(key)
+                    ?.let { value ->
+                        value.keys().asSequence().associateWith { value.getString(it) }
+                    }
+                    .orEmpty()
+            val removed = row.optJSONArray("removedRules") ?: JSONArray()
             return ProxyProfile(
                 row.getString("id"),
                 row.getString("name"),
@@ -42,6 +55,9 @@ internal data class ProxyProfile(
                 List(rules.length()) { rules.getString(it) },
                 row.optLong("updatedAt"),
                 row.optString("mode"),
+                mapping("selectedNodes"),
+                mapping("ruleOverrides"),
+                (0 until removed.length()).map { removed.getString(it) }.toSet(),
             )
         }
     }
@@ -80,7 +96,29 @@ internal class MihomoProfiles(context: Context) {
         }
     }
 
-    fun delete(id: String) = AtomicFile(file(id)).delete()
+    fun delete(id: String) {
+        AtomicFile(file(id)).delete()
+        AtomicFile(File(folder, "${UUID.fromString(id)}.nodes")).delete()
+    }
+
+    fun cachedNodes(id: String): JSONObject = runCatching {
+        JSONObject(
+            AtomicFile(File(folder, "${UUID.fromString(id)}.nodes")).readFully().decodeToString(),
+        )
+    }
+        .getOrDefault(JSONObject())
+
+    fun cacheNodes(id: String, nodes: JSONObject) {
+        val file = AtomicFile(File(folder, "${UUID.fromString(id)}.nodes"))
+        val out = file.startWrite()
+        try {
+            out.write(nodes.toString().toByteArray())
+            file.finishWrite(out)
+        } catch (error: Throwable) {
+            file.failWrite(out)
+            throw error
+        }
+    }
 
     private fun file(id: String): File = File(folder, "${UUID.fromString(id)}.json")
 
@@ -188,7 +226,8 @@ internal class MihomoProfiles(context: Context) {
             val rules = config["rules"] as? List<*> ?: emptyList<Any>()
             require(rules.all { it is String }) { "rules 须为规则列表" }
             if (profile.mode.isNotBlank()) config["mode"] = profile.mode
-            config["rules"] = profile.rules + rules.ifEmpty { listOf("MATCH,DIRECT") }
+            config["rules"] =
+                proxyRuleRows(profile, rules.filterIsInstance<String>()).map { it.raw }
             (config["dns"] as? Map<*, *>)?.let { dns ->
                 config["dns"] = dns.filterKeys { it != "listen" }
             }

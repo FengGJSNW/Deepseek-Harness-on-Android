@@ -61,6 +61,9 @@ internal object WorkspaceState {
     val hasTerminal: Boolean
         get() = WorkspaceTab.Terminal in opened
 
+    var terminalInstance by mutableIntStateOf(0)
+        private set
+
     fun forSession(id: String) {
         if (id == sessionId) return
         reset()
@@ -72,7 +75,7 @@ internal object WorkspaceState {
         val target =
             if (tab == WorkspaceTab.Browser && tab !in opened) {
                 BrowserState.tabs
-                    .lastOrNull { it.sessionId == sessionId }
+                    .lastOrNull { it.sessionId == sessionId && !it.userOwned }
                     ?.let { WorkspaceTab.Web(it.id) } ?: WorkspaceTab.Browser
             } else tab
         if (target != null && target != WorkspaceTab.Home) {
@@ -83,12 +86,21 @@ internal object WorkspaceState {
         visible = true
     }
 
-    fun openBrowser() {
-        open(
-            if (AssistantState.current.browserProvider == BrowserProvider.OFFICIAL)
-                WorkspaceTab.OfficialBrowser()
-            else WorkspaceTab.Browser,
-        )
+    fun openUserBrowser(context: android.content.Context) {
+        runCatching { AgentBrowser(context.applicationContext).newUserTab(AssistantState.current) }
+            .onSuccess { open(WorkspaceTab.Web(it.id)) }
+            .onFailure { AssistantState.error = it.message.orEmpty() }
+    }
+
+    fun openUserTerminal() {
+        open(WorkspaceTab.Terminal)
+        LocalTerminalState.sessionId = ""
+        terminalInstance++
+    }
+
+    fun closeChromePages() {
+        BrowserState.tabs.map { it.id }.forEach { closeBrowserTab(it) }
+        opened.filterIsInstance<WorkspaceTab.Web>().forEach { close(it) }
     }
 
     fun hide() {
@@ -250,17 +262,9 @@ internal fun ConversationWorkspace(progress: State<Float>) {
                             if (work == null) TeamList(agents) else TeamConversation(work)
                         }
                         WorkspaceTab.Browser ->
-                            BrowserWorkspace(
-                                AssistantState.current,
-                                browserTabs.lastOrNull(),
-                                browserTabs,
-                            )
+                            BrowserWorkspace(browserTabs.lastOrNull { !it.userOwned })
                         is WorkspaceTab.Web ->
-                            BrowserWorkspace(
-                                AssistantState.current,
-                                browserTabs.firstOrNull { it.id == tab.id },
-                                browserTabs,
-                            )
+                            BrowserWorkspace(browserTabs.firstOrNull { it.id == tab.id })
                         is WorkspaceTab.OfficialBrowser ->
                             OfficialBrowserWorkspace(AssistantState.current, tab.resultId)
                         WorkspaceTab.Files -> WorkspaceFiles(id)
@@ -282,7 +286,8 @@ internal fun ConversationWorkspace(progress: State<Float>) {
                         .inactiveIf(!open || tab != WorkspaceTab.Terminal),
                 ) {
                     val conversation = AssistantState.sessions.firstOrNull { it.id == id }
-                    if (conversation != null) key(id) { WorkspaceTerminal(conversation) }
+                    if (conversation != null)
+                        key(id, state.terminalInstance) { WorkspaceTerminal(conversation) }
                 }
             }
         }
@@ -333,11 +338,12 @@ private fun WorkspaceTabChip(label: WorkspaceLabel, selected: Boolean, onClose: 
 
 @Composable
 private fun WorkspaceTools() {
+    val context = androidx.compose.ui.platform.LocalContext.current
     val tools =
         listOf(
             WorkspaceLabel(WorkspaceTab.Agents, "子 Agent 会话", AppIcons.Agents) to "查看当前会话的子任务",
-            WorkspaceLabel(WorkspaceTab.Browser, "内置浏览器", AppIcons.Globe) to "切换官方搜索抓取与本机网页",
-            WorkspaceLabel(WorkspaceTab.Terminal, "会话终端", AppIcons.Terminal) to "沿用当前会话的终端级别",
+            WorkspaceLabel(WorkspaceTab.Browser, "内置浏览器", AppIcons.Globe) to "打开新标签页",
+            WorkspaceLabel(WorkspaceTab.Terminal, "会话终端", AppIcons.Terminal) to "新建用户终端",
             WorkspaceLabel(WorkspaceTab.Files, "会话文件", AppIcons.FolderOpen) to "打开文档和附件",
         )
     Column(
@@ -350,8 +356,11 @@ private fun WorkspaceTools() {
                 row.forEach { (tool, detail) ->
                     Surface(
                         onClick = {
-                            if (tool.tab == WorkspaceTab.Browser) WorkspaceState.openBrowser()
-                            else WorkspaceState.open(tool.tab)
+                            when (tool.tab) {
+                                WorkspaceTab.Browser -> WorkspaceState.openUserBrowser(context)
+                                WorkspaceTab.Terminal -> WorkspaceState.openUserTerminal()
+                                else -> WorkspaceState.open(tool.tab)
+                            }
                         },
                         modifier = Modifier.weight(1f).heightIn(min = 88.dp),
                         shape = ContinuousShape(14.dp),
@@ -367,6 +376,34 @@ private fun WorkspaceTools() {
                         }
                     }
                 }
+            }
+        }
+        BrowserState.tabs
+            .filter { it.sessionId == AssistantState.selectedId && !it.userOwned }
+            .forEach { page ->
+                SettingsLink(AppIcons.Globe, page.title.ifBlank { "Agent 网页" }, page.url) {
+                    WorkspaceState.open(WorkspaceTab.Web(page.id))
+                }
+            }
+        val session = AssistantState.current
+        if (
+            ExperienceSettings.browserMode.official ||
+                (sequenceOf(session.messages) +
+                        TeamState.agents
+                            .asSequence()
+                            .filter { it.sessionId == session.id }
+                            .map { it.messages })
+                    .any { entries ->
+                        entries.any {
+                            it.type == "tool" &&
+                                OfficialWebTool.entries.any { tool ->
+                                    it.text.contains(tool.method)
+                                }
+                        }
+                    }
+        ) {
+            SettingsLink(AppIcons.Globe, "官方浏览记录", "查看 Agent 搜索与抓取结果") {
+                WorkspaceState.open(WorkspaceTab.OfficialBrowser())
             }
         }
     }

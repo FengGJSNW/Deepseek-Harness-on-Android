@@ -73,6 +73,7 @@ internal fun ColumnScope.OfficialChatScreen(cardAside: State<Boolean>) {
     LaunchedEffect(
         snapshot.messages.size,
         snapshot.messages.lastOrNull()?.text?.length,
+        snapshot.messages.lastOrNull()?.reasoning?.length,
         followTail,
     ) {
         if (followTail && !dragging) list.scrollToConversationEnd()
@@ -133,7 +134,11 @@ internal fun ColumnScope.OfficialChatScreen(cardAside: State<Boolean>) {
                     border = BorderStroke(.7.dp, WhaleLine),
                 ) {
                     Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
-                        Box(Modifier.fillMaxWidth().heightIn(min = 36.dp, max = 140.dp)) {
+                        Box(
+                            Modifier.fillMaxWidth()
+                                .heightIn(min = 48.dp, max = 150.dp)
+                                .padding(vertical = 10.dp),
+                        ) {
                             if (draft.isBlank())
                                 Text("给 DeepSeek 发送消息", fontSize = 15.sp, color = WhaleMuted)
                             BasicTextField(
@@ -324,7 +329,7 @@ internal fun ColumnScope.OfficialChatScreen(cardAside: State<Boolean>) {
                         ),
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
-                    itemsIndexed(snapshot.messages) { _, message ->
+                    itemsIndexed(snapshot.messages) { index, message ->
                         if (message.role == "assistant") {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 JingAvatar(30.dp)
@@ -336,7 +341,40 @@ internal fun ColumnScope.OfficialChatScreen(cardAside: State<Boolean>) {
                                 )
                             }
                         }
-                        ChatMessage(ChatEntry(message.role, message.text), showHeader = false)
+                        if (message.reasoning.isNotBlank()) {
+                            var expanded by
+                                rememberSaveable(snapshot.url, index) { mutableStateOf(false) }
+                            Surface(
+                                shape = ContinuousShape(14.dp),
+                                color = WhaleMist,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+                                    TextButton(onClick = { expanded = !expanded }) {
+                                        val running =
+                                            snapshot.generating &&
+                                                index == snapshot.messages.lastIndex
+                                        Text(if (running) "正在思考" else "思考过程")
+                                        Text(if (expanded) "  ▴" else "  ▾")
+                                    }
+                                    if (expanded) {
+                                        HorizontalDivider(color = WhaleLine)
+                                        androidx.compose.foundation.text.selection
+                                            .SelectionContainer {
+                                                Text(
+                                                    message.reasoning,
+                                                    Modifier.padding(vertical = 10.dp),
+                                                    fontSize = 13.sp,
+                                                    lineHeight = 21.sp,
+                                                    color = WhaleMuted,
+                                                )
+                                            }
+                                    }
+                                }
+                            }
+                        }
+                        if (message.text.isNotBlank())
+                            ChatMessage(ChatEntry(message.role, message.text), showHeader = false)
                     }
                 }
             TaskNavigator(

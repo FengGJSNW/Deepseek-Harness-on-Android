@@ -26,5 +26,8 @@ class ShizukuTerminalService(context: Context?) : ITerminalWorker.Stub() {
 
     override fun readOnlyProbe() = worker.readOnlyProbe()
 
+    override fun appSystemAction(action: String, userId: Int) =
+        worker.appSystemAction(action, userId)
+
     override fun destroy() = worker.destroy()
 }

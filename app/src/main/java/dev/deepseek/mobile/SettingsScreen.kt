@@ -52,6 +52,7 @@ internal fun SettingsScreen(onCreatePlugin: () -> Unit, back: () -> Unit) {
             "runtime" to "运行环境",
             "extensions" to "扩展",
             "mihomo" to "Mihomo 代理",
+            "taskPower" to "后台保活",
         )
     fun parentPage() =
         when (page) {
@@ -112,6 +113,9 @@ internal fun SettingsScreen(onCreatePlugin: () -> Unit, back: () -> Unit) {
                                 SettingsLink(AppIcons.Browser, "Mihomo 代理", "订阅、节点与网络规则") {
                                     page = "mihomo"
                                 }
+                                SettingsLink(AppIcons.Bolt, "后台保活", "省电策略与执行期间的后台运行") {
+                                    page = "taskPower"
+                                }
                                 SettingsSection("体验")
                                 SettingsLink(AppIcons.Image, "外观", "字体、阅读与思考显示") {
                                     page = "display"
@@ -145,6 +149,7 @@ internal fun SettingsScreen(onCreatePlugin: () -> Unit, back: () -> Unit) {
                                 SettingsLink(AppIcons.Chat, "气泡效果", "文案、表情包与触发条件") {
                                     dialog = "bubbles"
                                 }
+                                WhaleMotionSettings()
                             }
                             "connection" -> {
                                 SettingsLink(AppIcons.Key, "DeepSeek API Key", "名称列表、添加、测试连接") {
@@ -196,7 +201,7 @@ internal fun SettingsScreen(onCreatePlugin: () -> Unit, back: () -> Unit) {
                                     "悬浮球",
                                     if (state.overlay) "已允许" else "去开启",
                                 ) {
-                                    AgentService.current?.setFloating(true)
+                                    MainActivity.current?.requestFloating()
                                 }
                                 TextButton(onClick = { AgentService.current?.setFloating(false) }) {
                                     Text("关闭悬浮球")
@@ -302,6 +307,7 @@ internal fun SettingsScreen(onCreatePlugin: () -> Unit, back: () -> Unit) {
                                 }
                             }
                             "extensions" -> ExtensionSettings(c, onCreatePlugin)
+                            "taskPower" -> TaskPowerSettings(c)
                             "mihomo" -> MihomoSettings()
                             "runtime" -> RuntimeSettings(c)
                             "typography" -> TypographySettings()
@@ -369,13 +375,19 @@ internal fun SettingsScreen(onCreatePlugin: () -> Unit, back: () -> Unit) {
                                 )
                             }
                             "browser" -> {
-                                ToggleSetting(
-                                    "内置浏览器工具",
-                                    "官方搜索与抓取、本机网页操作均无需无障碍",
-                                    ExperienceSettings.browserEnabled,
-                                ) {
-                                    ExperienceSettings.browserEnabled = it
-                                    ExperienceSettings.save()
+                                BrowserProvider.entries.forEach { mode ->
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        val select = {
+                                            ExperienceSettings.browserMode = mode
+                                            if (!mode.chrome) WorkspaceState.closeChromePages()
+                                            ExperienceSettings.save()
+                                        }
+                                        RadioButton(
+                                            ExperienceSettings.browserMode == mode,
+                                            onClick = select,
+                                        )
+                                        TextButton(onClick = select) { Text(mode.label) }
+                                    }
                                 }
                                 SettingsLink(
                                     AppIcons.Browser,
@@ -389,9 +401,9 @@ internal fun SettingsScreen(onCreatePlugin: () -> Unit, back: () -> Unit) {
                                 SettingsLink(
                                     AppIcons.Browser,
                                     "打开内置浏览器",
-                                    "当前会话使用${c.browserProvider.label}",
+                                    "打开新标签页",
                                 ) {
-                                    WorkspaceState.openBrowser()
+                                    WorkspaceState.openUserBrowser(context)
                                 }
                             }
                             "data" -> {

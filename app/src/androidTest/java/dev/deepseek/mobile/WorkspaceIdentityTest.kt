@@ -7,16 +7,28 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import org.junit.After
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
 
 class WorkspaceIdentityTest {
     @get:Rule val ui = createAndroidComposeRule<MainActivity>()
+    private var previousFloating: Boolean? = null
+
+    @After
+    fun restoreFloating() {
+        previousFloating?.let { value ->
+            ui.runOnUiThread { AgentService.current?.setFloating(value) }
+        }
+    }
 
     private fun prepare() {
         ui.waitUntil(30000) { AssistantState.ready }
         ui.runOnUiThread {
+            previousFloating =
+                ui.activity.getSharedPreferences("ui", 0).getBoolean("floating", false)
+            AgentService.current?.setFloating(false)
             resetTransientUiForTest()
             AssistantState.appMode = "work"
             AssistantState.activeTaskId = ""
@@ -79,7 +91,15 @@ class WorkspaceIdentityTest {
             title.assertTextEquals("当前工作会话")
             ui.onNodeWithContentDescription("工作区工具").performClick()
             ui.onNodeWithText("内置浏览器").performClick()
+            ui.onNodeWithTag("user-browser-address").assertIsDisplayed()
+            ui.runOnUiThread { assertNull(browser.view.parent) }
+            ui.onNodeWithContentDescription("工作区工具").performClick()
+            ui.onNodeWithText("测试网页").performClick()
             ui.onNodeWithTag("workspace-browser").assertIsDisplayed()
+            ui.onNodeWithText("不可操作").assertIsDisplayed()
+            ui.onNodeWithText("访问").performClick()
+            ui.onNodeWithText("不可操作").assertDoesNotExist()
+            ui.runOnUiThread { assertTrue(browser.userAccess) }
             title.assertTextEquals("当前工作会话")
             ui.runOnUiThread { assertTrue(browser.view.parent is ViewGroup) }
             TestSnapshots.capture(ui, "v082-workspace-browser")
@@ -91,7 +111,10 @@ class WorkspaceIdentityTest {
         } finally {
             ui.runOnUiThread {
                 WorkspaceState.reset()
-                closeBrowserTab(browser.id)
+                BrowserState.tabs
+                    .filter { it.sessionId == browser.sessionId }
+                    .map { it.id }
+                    .forEach(::closeBrowserTab)
             }
         }
     }

@@ -97,6 +97,10 @@ internal class ShellProcessBridge(context: Context) : ITerminalWorker.Stub() {
 
     override fun readOnlyProbe() = rpc("probe")
 
+    override fun appSystemAction(action: String, userId: Int) {
+        rpc("app-system", JSONObject().put("action", action).put("user", userId).toString())
+    }
+
     override fun cancel(id: String) {
         rpc("cancel", id)
     }

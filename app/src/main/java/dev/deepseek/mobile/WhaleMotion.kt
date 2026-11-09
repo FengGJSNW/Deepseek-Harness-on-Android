@@ -97,6 +97,7 @@ internal fun rememberWhaleMotion(
     val inspecting = LocalInspectionMode.current
     val density = LocalDensity.current.density
     val input = WhaleActivity.revision
+    val tuning = ExperienceSettings.petMotion
     val touching = (!WhaleActivity.patrolling && WhaleActivity.touching) || motion.held
     LaunchedEffect(
         lifecycle,
@@ -108,6 +109,7 @@ internal fun rememberWhaleMotion(
         input,
         touching,
         motion.dragging,
+        tuning,
     ) {
         if (inspecting) return@LaunchedEffect
         lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
@@ -118,27 +120,15 @@ internal fun rememberWhaleMotion(
                 delay(UiTuning.PetIdleDelayMillis)
                 WhaleActivity.patrolling = true
                 val duration =
-                    (travelX / density / UiTuning.PetTravelDpPerSecond * 1000f)
-                        .toInt()
-                        .coerceAtLeast(1000)
+                    (travelX / density / tuning.movement * 1000f).toInt().coerceAtLeast(1000)
                 coroutineScope {
                     launch {
                         while (true) {
-                            val beat = kotlin.random.Random.nextInt(570, 631)
                             val pressure = kotlin.random.Random.nextDouble(.82, 1.0).toFloat()
-                            // An independent jelly beat, with no vertical translation or travel
-                            // pause.
-                            motion.squish.animateTo(
-                                0f,
-                                keyframes {
-                                    durationMillis = beat
-                                    pressure at 95
-                                    // Hold at the bottom for 100 ms within the same beat.
-                                    pressure at 195 using FastOutSlowInEasing
-                                    -.20f at 300 using FastOutSlowInEasing
-                                    .07f at 385 using FastOutSlowInEasing
-                                    0f at 450
-                                },
+                            motion.squish.playPetBounce(
+                                tuning,
+                                pressure,
+                                kotlin.random.Random.nextInt(-30, 31),
                             )
                         }
                     }

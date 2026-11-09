@@ -318,6 +318,7 @@ private fun FishAppContent() {
         ChangesPanel()
         ReasoningIsland()
         FilePreview()
+        DevicePermissionPrompt()
         if (state.showAccessibilityInfo)
             WhaleSheet("允许助手查看和操作界面", close = { state.showAccessibilityInfo = false }) {
                 Text(

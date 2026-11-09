@@ -5,15 +5,20 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.deepseek.mobile.harness.boundedBytes
 import dev.deepseek.mobile.proxy.MihomoManager
 import dev.deepseek.mobile.proxy.MihomoProfiles
 import dev.deepseek.mobile.proxy.ProxyProfile
+import dev.deepseek.mobile.proxy.ProxyRuleRow
+import dev.deepseek.mobile.proxy.noResolveRuleTypes
+import dev.deepseek.mobile.proxy.proxyRuleTypes
 import kotlinx.coroutines.*
 import org.json.JSONArray
 import org.json.JSONObject
@@ -42,6 +47,15 @@ internal fun MihomoSettings() {
     var limit by remember(page, group, query) { mutableIntStateOf(40) }
     var delays by
         remember(state.profileId, state.running) { mutableStateOf(emptyMap<String, Int>()) }
+    var ruleRows by remember { mutableStateOf(emptyList<ProxyRuleRow>()) }
+    var ruleTargets by remember { mutableStateOf(emptyList<String>()) }
+    var ruleEdit by remember { mutableStateOf<ProxyRuleRow?>(null) }
+    var ruleDelete by remember { mutableStateOf<ProxyRuleRow?>(null) }
+    var measurement by remember { mutableStateOf<Job?>(null) }
+    LaunchedEffect(state.profileId, state.running) {
+        measurement?.cancel()
+        measurement = null
+    }
     var log by remember { mutableStateOf(emptyList<String>()) }
     fun run(block: suspend () -> Unit) {
         if (loading) return
@@ -64,12 +78,16 @@ internal fun MihomoSettings() {
         do {
             try {
                 profiles = manager.list()
+                if (page == "规则") {
+                    ruleRows = if (state.profileId.isBlank()) emptyList() else manager.ruleRows()
+                    ruleTargets =
+                        if (state.profileId.isBlank()) emptyList() else manager.ruleTargets()
+                }
                 if (state.running) {
                     config = manager.data("/configs")
                     payload =
                         when (page) {
                             "节点" -> manager.data("/proxies")
-                            "规则" -> manager.data("/rules")
                             "连接" -> manager.data("/connections")
                             else -> JSONObject()
                         }
@@ -97,7 +115,9 @@ internal fun MihomoSettings() {
                             }
                 } else {
                     config = JSONObject()
-                    payload = JSONObject()
+                    payload =
+                        if (page == "节点" && state.profileId.isNotBlank()) manager.data("/proxies")
+                        else JSONObject()
                     providers = emptyList()
                 }
                 if (page == "日志") log = manager.logs()
@@ -175,6 +195,9 @@ internal fun MihomoSettings() {
         ToggleSetting("终端代理", "给 Linux Sandbox、Shell 和 Root 命令设置代理环境变量", state.terminal) {
             run { manager.toggle("terminal", it) }
         }
+        ToggleSetting("允许 Agent 启动代理", "仅在 Agent 调用启动工具时启用当前配置", state.agentStart) {
+            run { manager.toggle("agentStart", it) }
+        }
         ToggleSetting("允许 Agent 切换节点", "允许 Agent 选择当前配置已有节点", state.agentNodes) {
             run { manager.toggle("agentNodes", it) }
         }
@@ -232,18 +255,45 @@ internal fun MihomoSettings() {
         log.takeLast(80).asReversed().forEach {
             Text(it, fontSize = 11.sp, fontFamily = DshaFonts.mono)
         }
-    } else if (!state.running) {
-        SettingsStatusCard(AppIcons.Globe, "启动代理后查看$page")
     } else if (page == "节点") {
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf("rule" to "规则", "global" to "全局", "direct" to "直连").forEach { (mode, title) ->
                 FilterChip(
                     selected = config.optString("mode").equals(mode, true),
-                    enabled = !loading,
+                    enabled = state.running && !loading,
                     onClick = { run { manager.mode(mode) } },
                     label = { Text(title) },
                 )
             }
+        }
+        if (!state.running) Text("显示上一次缓存的节点，选择将在下次启动时应用。", fontSize = 12.sp, color = WhaleMuted)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextButton(
+                enabled = state.running && !loading,
+                onClick = {
+                    if (measurement != null) measurement?.cancel()
+                    else
+                        measurement = scope.launch {
+                            try {
+                                status = ""
+                                delays = emptyMap()
+                                manager.measureAll { batch ->
+                                    withContext(Dispatchers.Main) { delays = delays + batch }
+                                }
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
+                            } catch (error: Exception) {
+                                status = error.message.orEmpty()
+                            } finally {
+                                measurement = null
+                            }
+                        }
+                },
+            ) {
+                Text(if (measurement == null) "全局测速" else "停止测速")
+            }
+            if (measurement != null)
+                Text("已测 ${delays.size} 个", color = WhaleMuted, fontSize = 12.sp)
         }
         val proxies = payload.optJSONObject("proxies") ?: JSONObject()
         val groups =
@@ -276,53 +326,95 @@ internal fun MihomoSettings() {
             val all = row.optJSONArray("all") ?: JSONArray()
             val nodes = List(all.length()) { all.optString(it) }.filter { it.contains(query, true) }
             val selector = row.optString("type").equals("Selector", true)
-            nodes.take(limit).forEach { node ->
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    TextButton(
-                        enabled = !loading && selector,
-                        onClick = { run { manager.choose(name, node) } },
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Text(if (node == row.optString("now")) "✓ $node" else node)
-                    }
-                    TextButton(
-                        enabled = !loading,
-                        onClick = {
-                            run {
-                                delays = delays + (node to manager.delay(node))
+            nodes.take(limit).chunked(2).forEach { pair ->
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    pair.forEach { node ->
+                        val chosen = node == row.optString("now")
+                        Surface(
+                            modifier = Modifier.weight(1f),
+                            onClick = { run { manager.choose(name, node) } },
+                            enabled = !loading && selector,
+                            shape = ContinuousShape(12.dp),
+                            color = if (chosen) WhaleTint else WhaleMist,
+                        ) {
+                            Column(Modifier.padding(horizontal = 9.dp, vertical = 7.dp)) {
+                                Text(
+                                    if (chosen) "✓ $node" else node,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                    fontSize = 13.sp,
+                                )
+                                TextButton(
+                                    enabled = state.running && !loading && measurement == null,
+                                    contentPadding = PaddingValues(0.dp),
+                                    modifier = Modifier.heightIn(min = 32.dp),
+                                    onClick = {
+                                        run { delays = delays + (node to manager.delay(node)) }
+                                    },
+                                ) {
+                                    Text(
+                                        delays[node]?.let { if (it > 0) "$it ms" else "不可用 · 重测" }
+                                            ?: "测速",
+                                        fontSize = 11.sp,
+                                    )
+                                }
                             }
-                        },
-                    ) {
-                        Text(delays[node]?.let { "$it ms" } ?: "测速")
+                        }
                     }
+                    if (pair.size == 1) Spacer(Modifier.weight(1f))
                 }
             }
             if (nodes.size > limit) TextButton(onClick = { limit += 40 }) { Text("显示更多") }
         }
     } else if (page == "规则") {
-        TextButton(enabled = !loading, onClick = { add = "rule" }) { Text("新增域名规则") }
-        selected?.rules?.forEach { rule ->
-            SettingsLink(AppIcons.Description, rule, "本地优先规则 · 删除") {
-                run { manager.removeRule(rule) }
-            }
+        TextButton(
+            enabled = !loading && selected != null,
+            onClick = {
+                ruleEdit = null
+                add = "rule"
+            },
+        ) {
+            Text("新增规则")
         }
         OutlinedTextField(
             query,
             { query = it },
-            label = { Text("筛选运行中规则") },
+            label = { Text("筛选规则") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
-        val rules = payload.optJSONArray("rules") ?: JSONArray()
-        val labels =
-            List(rules.length()) { rules.optJSONObject(it) }
-                .filterNotNull()
-                .map {
-                    "${it.optString("type")} · ${it.optString("payload")} → ${it.optString("proxy")}"
+        val filtered = ruleRows.withIndex().filter { it.value.raw.contains(query, true) }
+        filtered.take(limit).forEach { (index, rule) ->
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("${index + 1}", Modifier.width(30.dp), fontSize = 12.sp, color = WhaleMuted)
+                Column(Modifier.weight(1f)) {
+                    Text(rule.value.ifBlank { rule.type }, maxLines = 2, fontSize = 14.sp)
+                    Text(
+                        "${rule.type} · ${rule.target}",
+                        maxLines = 2,
+                        color = WhaleMuted,
+                        fontSize = 12.sp,
+                    )
                 }
-                .filter { it.contains(query, true) }
-        labels.take(limit).forEach { Text(it, fontSize = 13.sp) }
-        if (labels.size > limit) TextButton(onClick = { limit += 40 }) { Text("显示更多") }
+                TextButton(
+                    enabled = !loading,
+                    onClick = {
+                        ruleEdit = rule
+                        add = "rule"
+                    },
+                ) {
+                    Text("编辑")
+                }
+                TextButton(enabled = !loading, onClick = { ruleDelete = rule }) { Text("删除") }
+            }
+            HorizontalDivider(color = WhaleLine)
+        }
+        if (filtered.size > limit) TextButton(onClick = { limit += 40 }) { Text("显示更多") }
+    } else if (!state.running) {
+        SettingsStatusCard(AppIcons.Globe, "启动代理后查看$page")
     } else if (page == "连接") {
         val connections = payload.optJSONArray("connections") ?: JSONArray()
         Text(
@@ -450,37 +542,59 @@ internal fun MihomoSettings() {
             }
         }
     }
-    if (type == "rule") {
-        var ruleType by remember { mutableStateOf("DOMAIN-SUFFIX") }
-        var domain by remember { mutableStateOf("") }
-        var target by remember { mutableStateOf("DIRECT") }
-        WhaleSheet("新增域名规则", "本地规则优先于订阅规则，更新订阅后仍保留。", { add = "" }) {
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                listOf("DOMAIN", "DOMAIN-SUFFIX", "DOMAIN-KEYWORD").forEach { key ->
-                    FilterChip(
-                        selected = ruleType == key,
-                        onClick = { ruleType = key },
-                        label = { Text(key) },
-                    )
-                }
-            }
-            OutlinedTextField(
-                domain,
-                { domain = it },
-                label = { Text("域名或关键词") },
-                singleLine = true,
-            )
-            OutlinedTextField(
-                target,
-                { target = it },
-                label = { Text("节点或策略组，如 DIRECT") },
-                singleLine = true,
-            )
+    ruleDelete?.let { row ->
+        WhaleSheet("删除规则？", row.raw, { ruleDelete = null }) {
             Button(
                 enabled = !loading,
                 onClick = {
                     run {
-                        manager.setRule(ruleType, domain.trim(), target.trim())
+                        manager.deleteRule(row)
+                        ruleDelete = null
+                    }
+                },
+            ) {
+                Text("删除规则")
+            }
+            if (status.isNotBlank())
+                Text(status, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+        }
+    }
+    if (type == "rule") {
+        val original = ruleEdit
+        var ruleType by
+            remember(original) {
+                mutableStateOf(original?.type?.takeIf { it in proxyRuleTypes } ?: "DOMAIN-SUFFIX")
+            }
+        var value by remember(original) { mutableStateOf(original?.value.orEmpty()) }
+        var target by remember(original) { mutableStateOf(original?.target ?: "DIRECT") }
+        var noResolve by remember(original) { mutableStateOf(original?.noResolve ?: false) }
+        WhaleSheet(if (original == null) "新增规则" else "编辑规则", "规则保存在当前配置，订阅更新后仍保留。", { add = "" }) {
+            ProxyRulePicker(
+                "规则类型",
+                "${proxyRuleTypes[ruleType]} ($ruleType)",
+                proxyRuleTypes.map { it.key to "${it.value} (${it.key})" },
+            ) {
+                ruleType = it
+            }
+            if (ruleType != "MATCH")
+                OutlinedTextField(
+                    value,
+                    { value = it },
+                    label = { Text("规则内容") },
+                    singleLine = true,
+                    placeholder = {
+                        Text(if (ruleType.startsWith("IP-CIDR")) "192.0.2.0/24" else "example.com")
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            ProxyRulePicker("代理策略", target, ruleTargets.map { it to it }) { target = it }
+            if (ruleType in noResolveRuleTypes)
+                ToggleSetting("不解析域名", "仅匹配已有的 IP 地址", noResolve) { noResolve = it }
+            Button(
+                enabled = !loading && (value.isNotBlank() || ruleType == "MATCH"),
+                onClick = {
+                    run {
+                        manager.editRule(original, ruleType, value.trim(), target, noResolve)
                         add = ""
                     }
                 },
@@ -489,6 +603,34 @@ internal fun MihomoSettings() {
             }
             if (status.isNotBlank())
                 Text(status, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+        }
+    }
+}
+
+@Composable
+private fun ProxyRulePicker(
+    label: String,
+    chosen: String,
+    choices: List<Pair<String, String>>,
+    select: (String) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        TextButton(onClick = { expanded = true }) { Text("$label · $chosen ▾") }
+        DropdownMenu(
+            expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.heightIn(max = 320.dp),
+        ) {
+            choices.forEach { (key, text) ->
+                DropdownMenuItem(
+                    text = { Text(text) },
+                    onClick = {
+                        select(key)
+                        expanded = false
+                    },
+                )
+            }
         }
     }
 }

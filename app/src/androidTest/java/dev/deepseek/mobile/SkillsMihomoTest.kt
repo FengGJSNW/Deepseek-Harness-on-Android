@@ -68,7 +68,7 @@ class SkillsMihomoTest {
                   - name: QA
                     type: select
                     proxies: [DIRECT, local-qa]
-                rules: ['MATCH,QA']
+                rules: ['DOMAIN,before-qa.test,DIRECT', 'MATCH,QA']
             """
                         .trimIndent(),
                 )
@@ -78,7 +78,39 @@ class SkillsMihomoTest {
                 manager.toggle("terminal", true)
                 manager.toggle("agentNodes", false)
                 manager.toggle("agentRules", false)
-                manager.start()
+                manager.toggle("agentStart", false)
+                assertTrue(runCatching { manager.agent("start", JSONObject()) }.isFailure)
+                manager.choose("QA", "local-qa")
+                assertEquals(
+                    "local-qa",
+                    manager
+                        .data("/proxies")
+                        .getJSONObject("proxies")
+                        .getJSONObject("QA")
+                        .getString("now"),
+                )
+                manager.editRule(
+                    manager.ruleRows().first(),
+                    "DOMAIN",
+                    "first-edit-qa.test",
+                    "REJECT",
+                    false,
+                )
+                manager.editRule(
+                    manager.ruleRows().first(),
+                    "DOMAIN-SUFFIX",
+                    "second-edit-qa.test",
+                    "DIRECT",
+                    false,
+                )
+                assertEquals(
+                    "DOMAIN-SUFFIX,second-edit-qa.test,DIRECT",
+                    manager.ruleRows().first().raw,
+                )
+                manager.deleteRule(manager.ruleRows().first())
+                assertEquals(listOf("MATCH,QA"), manager.ruleRows().map { it.raw })
+                manager.toggle("agentStart", true)
+                manager.agent("start", JSONObject())
                 assertEquals(
                     "1.19.33",
                     manager.data("/version").getString("version").removePrefix("v"),
@@ -192,6 +224,21 @@ class SkillsMihomoTest {
                     MihomoManager.withProxyEnvironment("curl https://example.org", terminalPort)
                         .contains("127.0.0.1:$terminalPort"),
                 )
+                val delays = mutableMapOf<String, Int>()
+                manager.measureAll { delays.putAll(it) }
+                assertTrue(
+                    "Batch delay measurement retains failed nodes",
+                    delays.containsKey("local-qa"),
+                )
+                manager.stop()
+                assertEquals(
+                    "local-qa",
+                    manager
+                        .data("/proxies")
+                        .getJSONObject("proxies")
+                        .getJSONObject("QA")
+                        .getString("now"),
+                )
             } catch (error: Throwable) {
                 throw AssertionError(
                     "${error.message}\n${manager.logs().takeLast(20).joinToString("\n")}",
@@ -205,6 +252,7 @@ class SkillsMihomoTest {
                 manager.toggle("terminal", saved.terminal)
                 manager.toggle("agentNodes", saved.agentNodes)
                 manager.toggle("agentRules", saved.agentRules)
+                manager.toggle("agentStart", saved.agentStart)
             }
         }
     }

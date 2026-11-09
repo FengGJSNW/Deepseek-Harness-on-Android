@@ -21,11 +21,21 @@ internal data class BubblePhrase(
 
 internal object ExperienceSettings {
     var reasoningMode by mutableStateOf("island")
-    var browserEnabled by mutableStateOf(true)
+    var browserMode by mutableStateOf(BrowserProvider.LOCAL)
+    var browserEnabled: Boolean
+        get() = browserMode != BrowserProvider.BLOCKED
+        set(value) {
+            if (!value) browserMode = BrowserProvider.BLOCKED
+            else if (!browserEnabled) browserMode = BrowserProvider.LOCAL
+        }
+
     var maxAgents by mutableIntStateOf(4)
     var textScale by mutableFloatStateOf(1f)
     var lineSpacing by mutableFloatStateOf(1.4f)
     var taskNavigation by mutableStateOf(true)
+    var petMotion by mutableStateOf(PetMotionSettings())
+    var keepTasksAwake by mutableStateOf(true)
+    var privilegedKeepAlive by mutableStateOf(false)
     val phrases = mutableStateListOf<BubblePhrase>()
     private var context: Context? = null
 
@@ -33,11 +43,28 @@ internal object ExperienceSettings {
         context = ctx.applicationContext
         val p = ctx.getSharedPreferences("experience-v1", Context.MODE_PRIVATE)
         reasoningMode = p.getString("reasoning", "island") ?: "island"
-        browserEnabled = p.getBoolean("browser", true)
+        browserMode =
+            BrowserProvider.parse(
+                p.getString(
+                        "browserMode",
+                        if (p.getBoolean("browser", true)) "local" else "blocked",
+                    )
+                    .orEmpty(),
+            )
         maxAgents = p.getInt("agents", 4).coerceIn(1, 8)
         textScale = p.getFloat("textScale", 1f).coerceIn(.85f, 1.3f)
         lineSpacing = p.getFloat("lineSpacing", 1.4f).coerceIn(1.2f, 1.9f)
         taskNavigation = p.getBoolean("taskNavigation", true)
+        keepTasksAwake = p.getBoolean("keepTasksAwake", true)
+        privilegedKeepAlive = p.getBoolean("privilegedKeepAlive", false)
+        petMotion =
+            PetMotionSettings(
+                p.getFloat("petMovement", 24f).coerceIn(8f, 64f),
+                p.getFloat("petDamping", .42f).coerceIn(.25f, 1f),
+                p.getInt("petInterval", 600).coerceIn(400, 1800),
+                p.getFloat("petRate", 1f).coerceIn(.5f, 2f),
+                p.getInt("petPressUnits", 10).coerceIn(0, 30),
+            )
         phrases.clear()
         val raw = p.getString("phrases", null)
         if (raw != null)
@@ -83,11 +110,18 @@ internal object ExperienceSettings {
             ?.getSharedPreferences("experience-v1", Context.MODE_PRIVATE)
             ?.edit()
             ?.putString("reasoning", reasoningMode)
-            ?.putBoolean("browser", browserEnabled)
+            ?.putString("browserMode", browserMode.key)
             ?.putInt("agents", maxAgents)
             ?.putFloat("textScale", textScale)
             ?.putFloat("lineSpacing", lineSpacing)
             ?.putBoolean("taskNavigation", taskNavigation)
+            ?.putBoolean("keepTasksAwake", keepTasksAwake)
+            ?.putBoolean("privilegedKeepAlive", privilegedKeepAlive)
+            ?.putFloat("petMovement", petMotion.movement)
+            ?.putFloat("petDamping", petMotion.damping)
+            ?.putInt("petInterval", petMotion.interval)
+            ?.putFloat("petRate", petMotion.rate)
+            ?.putInt("petPressUnits", petMotion.pressUnits)
             ?.putString("phrases", JSONArray(phrases.map { it.json() }).toString())
             ?.apply()
     }

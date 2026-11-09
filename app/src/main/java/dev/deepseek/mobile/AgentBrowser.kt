@@ -16,10 +16,13 @@ internal class BrowserTab(
     val owner: String,
     val sessionId: String,
     val view: WebView,
+    val userOwned: Boolean = false,
 ) {
     var title by mutableStateOf("网页")
     var url by mutableStateOf("")
     var loading by mutableStateOf(false)
+    var userAccess by mutableStateOf(userOwned)
+    var userTouchActive = false
     var snapshot = ""
     var navigation: CompletableDeferred<Unit>? = null
 }
@@ -31,10 +34,12 @@ internal object BrowserState {
 /** No native JS bridge is installed in web pages; only constrained DOM actions are exposed. */
 @SuppressLint("SetJavaScriptEnabled")
 internal class AgentBrowser(private val context: Context) {
-    private fun checkedUrl(url: String): String {
+    internal fun checkedUrl(url: String): String {
         val uri = Uri.parse(url)
         require(
-            uri.scheme in setOf("https", "http") &&
+            url.length <= 4096 &&
+                url.none(Char::isISOControl) &&
+                uri.scheme in setOf("https", "http") &&
                 !uri.host.isNullOrBlank() &&
                 uri.userInfo == null,
         ) {
@@ -48,7 +53,8 @@ internal class AgentBrowser(private val context: Context) {
     private fun tab(args: JSONObject): BrowserTab {
         val task = AssistantState.running ?: error("任务已停止")
         return BrowserState.tabs.firstOrNull {
-            it.id == args.getString("tab") &&
+            !it.userOwned &&
+                it.id == args.getString("tab") &&
                 it.owner == owner(args) &&
                 it.sessionId == task.sessionId
         } ?: error("网页标签不属于当前智能体")
@@ -64,121 +70,135 @@ internal class AgentBrowser(private val context: Context) {
         return withTimeout(15000) { result.await() }
     }
 
+    fun newUserTab(conversation: Conversation): BrowserTab =
+        createTab("", conversation.id, conversation.projectId, userOwned = true)
+
+    private fun createTab(
+        owner: String,
+        sessionId: String,
+        projectId: String,
+        userOwned: Boolean = false,
+    ): BrowserTab {
+        require(BrowserState.tabs.count { it.sessionId == sessionId } < 16) {
+            "当前会话已打开 16 个网页，请先关闭不再使用的标签"
+        }
+        val view = WebView(context)
+        val tab = BrowserTab(UUID.randomUUID().toString(), owner, sessionId, view, userOwned)
+        view.settings.apply {
+            javaScriptEnabled = true
+            domStorageEnabled = true
+            allowFileAccess = false
+            allowContentAccess = false
+            mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+            setSupportMultipleWindows(false)
+            javaScriptCanOpenWindowsAutomatically = false
+        }
+        CookieManager.getInstance().setAcceptThirdPartyCookies(view, false)
+        val policy =
+            dev.deepseek.mobile.harness.PermissionContext(
+                sessionId = sessionId,
+                projectId = projectId,
+                actor = if (userOwned) "user" else "agent",
+            )
+        val permissions = dev.deepseek.mobile.harness.HarnessCoordinator.get(context).permissions
+        fun mayLoad(url: String) =
+            ExperienceSettings.browserMode.chrome &&
+                runCatching {
+                        permissions
+                            .evaluate(policy, dev.deepseek.mobile.harness.Capability.NETWORK, url)
+                            .effect == dev.deepseek.mobile.harness.PermissionEffect.ALLOW
+                    }
+                    .getOrDefault(false)
+        view.webViewClient =
+            object : WebViewClient() {
+                override fun shouldInterceptRequest(
+                    view: WebView,
+                    request: WebResourceRequest,
+                ): WebResourceResponse? {
+                    val allowed = mayLoad(request.url.toString())
+                    return if (allowed) null
+                    else
+                        WebResourceResponse(
+                            "text/plain",
+                            "UTF-8",
+                            403,
+                            "Forbidden",
+                            emptyMap(),
+                            java.io.ByteArrayInputStream("网络规则未允许此请求".toByteArray()),
+                        )
+                }
+
+                override fun shouldOverrideUrlLoading(
+                    view: WebView,
+                    request: WebResourceRequest,
+                ): Boolean = runCatching {
+                    !mayLoad(checkedUrl(request.url.toString()))
+                }
+                    .getOrDefault(true)
+
+                override fun onPageStarted(
+                    view: WebView,
+                    url: String?,
+                    favicon: android.graphics.Bitmap?,
+                ) {
+                    tab.snapshot = ""
+                    tab.loading = true
+                    tab.url = url.orEmpty()
+                }
+
+                override fun onPageFinished(view: WebView, url: String?) {
+                    tab.loading = false
+                    tab.url = url.orEmpty()
+                    tab.title = view.title.orEmpty()
+                    tab.navigation?.complete(Unit)
+                }
+
+                override fun onReceivedError(
+                    view: WebView,
+                    request: WebResourceRequest,
+                    error: WebResourceError,
+                ) {
+                    if (request.isForMainFrame)
+                        tab.navigation?.completeExceptionally(
+                            IllegalStateException("网页加载失败：${error.description}"),
+                        )
+                }
+
+                override fun onRenderProcessGone(
+                    view: WebView,
+                    detail: RenderProcessGoneDetail,
+                ): Boolean {
+                    BrowserState.tabs.remove(tab)
+                    (view.parent as? android.view.ViewGroup)?.removeView(view)
+                    view.destroy()
+                    tab.navigation?.completeExceptionally(
+                        IllegalStateException("网页进程已退出，请重新打开"),
+                    )
+                    return true
+                }
+            }
+        view.measure(
+            android.view.View.MeasureSpec.makeMeasureSpec(
+                1080,
+                android.view.View.MeasureSpec.EXACTLY,
+            ),
+            android.view.View.MeasureSpec.makeMeasureSpec(
+                1600,
+                android.view.View.MeasureSpec.EXACTLY,
+            ),
+        )
+        view.layout(0, 0, 1080, 1600)
+        BrowserState.tabs.add(tab)
+        return tab
+    }
+
     suspend fun execute(method: String, args: JSONObject): JSONObject {
         if (method == "browser_open") {
             val url = checkedUrl(args.getString("url"))
             val task = AssistantState.running ?: error("任务已停止")
-            require(BrowserState.tabs.count { it.sessionId == task.sessionId } < 16) {
-                "当前会话已打开 16 个网页，请在功能区关闭不再使用的标签"
-            }
-            val view = WebView(context)
-            val tab = BrowserTab(UUID.randomUUID().toString(), owner(args), task.sessionId, view)
-            view.settings.apply {
-                javaScriptEnabled = true
-                domStorageEnabled = true
-                allowFileAccess = false
-                allowContentAccess = false
-                mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-                setSupportMultipleWindows(false)
-                javaScriptCanOpenWindowsAutomatically = false
-            }
-            CookieManager.getInstance().setAcceptThirdPartyCookies(view, false)
-            view.webViewClient =
-                object : WebViewClient() {
-                    override fun shouldInterceptRequest(
-                        view: WebView,
-                        request: WebResourceRequest,
-                    ): WebResourceResponse? {
-                        val permissions =
-                            dev.deepseek.mobile.harness.HarnessCoordinator.get(context).permissions
-                        val policy =
-                            dev.deepseek.mobile.harness.PermissionContext(
-                                sessionId = task.sessionId,
-                                projectId = task.projectId,
-                            )
-                        val allowed =
-                            permissions
-                                .evaluate(
-                                    policy,
-                                    dev.deepseek.mobile.harness.Capability.NETWORK,
-                                    request.url.toString(),
-                                )
-                                .effect == dev.deepseek.mobile.harness.PermissionEffect.ALLOW
-                        return if (allowed) null
-                        else
-                            WebResourceResponse(
-                                "text/plain",
-                                "UTF-8",
-                                403,
-                                "Forbidden",
-                                emptyMap(),
-                                java.io.ByteArrayInputStream("网络规则未允许此请求".toByteArray()),
-                            )
-                    }
-
-                    override fun shouldOverrideUrlLoading(
-                        view: WebView,
-                        request: WebResourceRequest,
-                    ): Boolean = runCatching {
-                        checkedUrl(request.url.toString())
-                        false
-                    }
-                        .getOrDefault(true)
-
-                    override fun onPageStarted(
-                        view: WebView,
-                        url: String?,
-                        favicon: android.graphics.Bitmap?,
-                    ) {
-                        tab.snapshot = ""
-                        tab.loading = true
-                        tab.url = url.orEmpty()
-                    }
-
-                    override fun onPageFinished(view: WebView, url: String?) {
-                        tab.loading = false
-                        tab.url = url.orEmpty()
-                        tab.title = view.title.orEmpty()
-                        tab.navigation?.complete(Unit)
-                    }
-
-                    override fun onReceivedError(
-                        view: WebView,
-                        request: WebResourceRequest,
-                        error: WebResourceError,
-                    ) {
-                        if (request.isForMainFrame)
-                            tab.navigation?.completeExceptionally(
-                                IllegalStateException("网页加载失败：${error.description}"),
-                            )
-                    }
-
-                    override fun onRenderProcessGone(
-                        view: WebView,
-                        detail: RenderProcessGoneDetail,
-                    ): Boolean {
-                        BrowserState.tabs.remove(tab)
-                        view.destroy()
-                        tab.navigation?.completeExceptionally(
-                            IllegalStateException("网页进程已退出，请重新打开"),
-                        )
-                        return true
-                    }
-                }
-            view.measure(
-                android.view.View.MeasureSpec.makeMeasureSpec(
-                    1080,
-                    android.view.View.MeasureSpec.EXACTLY,
-                ),
-                android.view.View.MeasureSpec.makeMeasureSpec(
-                    1600,
-                    android.view.View.MeasureSpec.EXACTLY,
-                ),
-            )
-            view.layout(0, 0, 1080, 1600)
-            BrowserState.tabs.add(tab)
+            val tab = createTab(owner(args), task.sessionId, task.projectId)
             tab.navigation = CompletableDeferred()
-            view.loadUrl(url)
+            tab.view.loadUrl(url)
             withTimeout(45000) { tab.navigation!!.await() }
             return JSONObject()
                 .put("tab", tab.id)
@@ -187,6 +207,7 @@ internal class AgentBrowser(private val context: Context) {
                 .put("message", "网页已在内置浏览器打开，请获取快照")
         }
         val tab = tab(args)
+        if (method == "browser_act") check(!tab.userTouchActive) { "用户正在同步操作网页，请稍后获取新快照" }
         if (method == "browser_source") {
             val offset = args.optInt("offset").coerceAtLeast(0)
             return (script(

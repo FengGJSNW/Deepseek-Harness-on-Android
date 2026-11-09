@@ -46,6 +46,91 @@ open class ProcessWorker : ITerminalWorker.Stub() {
     private val executor = Executors.newCachedThreadPool()
     private val timer = Executors.newSingleThreadScheduledExecutor()
 
+    override fun appSystemAction(action: String, userId: Int) {
+        check(Process.myUid() in setOf(0, 2000)) { "需要已授权的 Shell 或 Root" }
+        require(userId in 0..999)
+        val app = "dev.deepseek.mobile"
+        val user = userId.toString()
+        fun system(vararg argv: String): String {
+            val process = ProcessBuilder(*argv).redirectErrorStream(true).start()
+            try {
+                check(process.waitFor(5, TimeUnit.SECONDS)) { "系统权限操作超时" }
+                check(process.exitValue() == 0) { "系统拒绝此操作，请在系统设置中开启" }
+                return process.inputStream.bufferedReader().use { it.readText() }.trim()
+            } finally {
+                if (process.isAlive) process.destroyForcibly()
+            }
+        }
+        when (action) {
+            "keep_awake" ->
+                system(
+                    "/system/bin/cmd",
+                    "deviceidle",
+                    "tempwhitelist",
+                    "-u",
+                    user,
+                    "-d",
+                    "120000",
+                    app,
+                )
+            "overlay" ->
+                system(
+                    "/system/bin/cmd",
+                    "appops",
+                    "set",
+                    "--user",
+                    user,
+                    app,
+                    "SYSTEM_ALERT_WINDOW",
+                    "allow",
+                )
+            "notifications" ->
+                system(
+                    "/system/bin/pm",
+                    "grant",
+                    "--user",
+                    user,
+                    app,
+                    "android.permission.POST_NOTIFICATIONS",
+                )
+            "accessibility" -> {
+                val component = "$app/.PhoneAccessibility"
+                val list =
+                    system(
+                            "/system/bin/settings",
+                            "--user",
+                            user,
+                            "get",
+                            "secure",
+                            "enabled_accessibility_services",
+                        )
+                        .split(':')
+                        .filter { it.isNotBlank() && it != "null" }
+                if (component !in list && "$app/$app.PhoneAccessibility" !in list) {
+                    system(
+                        "/system/bin/settings",
+                        "--user",
+                        user,
+                        "put",
+                        "secure",
+                        "enabled_accessibility_services",
+                        (list + component).joinToString(":"),
+                    )
+                }
+                system(
+                    "/system/bin/settings",
+                    "--user",
+                    user,
+                    "put",
+                    "secure",
+                    "accessibility_enabled",
+                    "1",
+                )
+            }
+            else -> error("不支持的应用权限操作")
+        }
+    }
+
     override fun info(): String {
         val missing =
             listOf("mnt", "pid", "ipc", "net", "uts").filterNot {

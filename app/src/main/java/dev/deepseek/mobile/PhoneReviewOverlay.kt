@@ -19,6 +19,7 @@ internal class PhoneReviewOverlay(
         private set
 
     private var shown: Triple<String, String, String>? = null
+    private var attachedManager: WindowManager? = null
 
     private fun dp(value: Int) = (value * service.resources.displayMetrics.density).toInt()
 
@@ -109,25 +110,31 @@ internal class PhoneReviewOverlay(
             0,
         )
         paper.addView(buttons)
+        val accessibilityWindow =
+            PhoneAccessibility.current?.getSystemService(WindowManager::class.java)
+        val window = accessibilityWindow ?: manager
         val params =
             WindowManager.LayoutParams(
-                    (manager.currentWindowMetrics.bounds.width() - dp(24)).coerceIn(
+                    (window.currentWindowMetrics.bounds.width() - dp(24)).coerceIn(
                         dp(220),
                         dp(480),
                     ),
                     -2,
-                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                    if (accessibilityWindow != null)
+                        WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
+                    else WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
                     WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                         WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                         WindowManager.LayoutParams.FLAG_SECURE,
                     PixelFormat.TRANSLUCENT,
                 )
                 .apply {
-                    gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+                    gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
                     y = dp(12)
                 }
         try {
-            manager.addView(paper, params)
+            window.addView(paper, params)
+            attachedManager = window
             view = paper
             shown = key
         } catch (_: Exception) {
@@ -171,7 +178,8 @@ internal class PhoneReviewOverlay(
         }
 
     fun dismiss() {
-        view?.let { runCatching { manager.removeViewImmediate(it) } }
+        view?.let { runCatching { attachedManager?.removeViewImmediate(it) } }
+        attachedManager = null
         view = null
         shown = null
     }

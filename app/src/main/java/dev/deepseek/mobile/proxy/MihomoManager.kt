@@ -33,6 +33,7 @@ internal data class MihomoState(
     val terminal: Boolean = false,
     val agentNodes: Boolean = false,
     val agentRules: Boolean = false,
+    val agentStart: Boolean = false,
     val autoUpdate: Boolean = false,
 )
 
@@ -52,6 +53,7 @@ internal class MihomoManager private constructor(private val context: Context) {
                 terminal = prefs.getBoolean("terminal", true),
                 agentNodes = prefs.getBoolean("agentNodes", false),
                 agentRules = prefs.getBoolean("agentRules", false),
+                agentStart = prefs.getBoolean("agentStart", false),
                 autoUpdate = prefs.getBoolean("autoUpdate", false),
             ),
         )
@@ -119,8 +121,10 @@ internal class MihomoManager private constructor(private val context: Context) {
         mutable.value = mutable.value.copy(profileId = id)
     }
 
-    suspend fun start() = locked {
-        if (active?.process?.isAlive == true) return@locked
+    suspend fun start() = locked { startCore() }
+
+    private suspend fun startCore() {
+        if (active?.process?.isAlive == true) return
         check(core.canExecute()) { "此安装包没有适用的 Mihomo 内核" }
         val profile = profiles.read(mutable.value.profileId.ifBlank { error("请先导入并选择代理配置") })
         stopCore()
@@ -158,6 +162,8 @@ internal class MihomoManager private constructor(private val context: Context) {
             if (mutable.value.browser) browserProxy(port)
             active = launched
             mutable.value = mutable.value.copy(running = true)
+            restoreChoices(launched, profile)
+            runCatching { liveNodes(launched, profile.id) }
             scope.launch {
                 process.waitFor()
                 locked {
@@ -202,6 +208,7 @@ internal class MihomoManager private constructor(private val context: Context) {
                 "terminal" -> previous.copy(terminal = value)
                 "agentNodes" -> previous.copy(agentNodes = value)
                 "agentRules" -> previous.copy(agentRules = value)
+                "agentStart" -> previous.copy(agentStart = value)
                 "autoUpdate" -> previous.copy(autoUpdate = value)
                 else -> error("设置无效")
             }
@@ -284,7 +291,76 @@ internal class MihomoManager private constructor(private val context: Context) {
                     "/providers/rules",
                 ),
         )
-        api(running(), path)
+        if (path == "/proxies") JSONObject().put("proxies", nodesFor(selectedProfile()))
+        else api(running(), path)
+    }
+
+    private fun selectedProfile() =
+        profiles.read(mutable.value.profileId.ifBlank { error("请先导入并选择代理配置") })
+
+    private fun liveNodes(core: Core, id: String): JSONObject {
+        val nodes = api(core, "/proxies").getJSONObject("proxies")
+        val metadata = JSONObject()
+        nodes.keys().forEach { name ->
+            val node = nodes.getJSONObject(name)
+            metadata.put(
+                name,
+                JSONObject()
+                    .put("type", node.optString("type"))
+                    .put("all", node.optJSONArray("all"))
+                    .put("now", node.opt("now"))
+                    .put("testUrl", node.opt("testUrl")),
+            )
+        }
+        if (metadata.toString() != profiles.cachedNodes(id).toString())
+            profiles.cacheNodes(id, metadata)
+        return nodes
+    }
+
+    private fun nodesFor(profile: ProxyProfile): JSONObject {
+        active
+            ?.takeIf { it.process.isAlive }
+            ?.let {
+                return liveNodes(it, profile.id)
+            }
+        val config = MihomoProfiles.config(profile)
+        val cached = profiles.cachedNodes(profile.id)
+        fun named(key: String) = (config[key] as? List<*>).orEmpty().mapNotNull { it as? Map<*, *> }
+        val nodes = JSONObject(cached.toString())
+        for (node in named("proxies")) {
+            val name = node["name"] as? String ?: continue
+            if (!nodes.has(name)) nodes.put(name, JSONObject().put("type", node["type"]))
+        }
+        for (group in named("proxy-groups")) {
+            val name = group["name"] as? String ?: continue
+            if (!nodes.has(name))
+                nodes.put(
+                    name,
+                    JSONObject()
+                        .put("type", if (group["type"] == "select") "Selector" else group["type"])
+                        .put("all", JSONArray((group["proxies"] as? List<*>).orEmpty())),
+                )
+        }
+        if (!nodes.has("GLOBAL")) {
+            val all = nodes.keys().asSequence().toList()
+            nodes.put(
+                "GLOBAL",
+                JSONObject().put("type", "Selector").put("all", JSONArray(listOf("DIRECT") + all)),
+            )
+        }
+        profile.selectedNodes.forEach { (group, node) ->
+            nodes.optJSONObject(group)?.put("now", node)
+        }
+        return nodes
+    }
+
+    private fun restoreChoices(core: Core, profile: ProxyProfile) {
+        profile.selectedNodes.forEach { (group, node) ->
+            runCatching {
+                api(core, "/proxies/${encode(group)}", "PUT", JSONObject().put("name", node))
+            }
+                .onFailure { log("一项已缓存的节点选择不再可用") }
+        }
     }
 
     suspend fun mode(mode: String) = locked {
@@ -304,22 +380,70 @@ internal class MihomoManager private constructor(private val context: Context) {
     suspend fun choose(group: String, node: String) = locked { chooseNode(group, node) }
 
     private fun chooseNode(group: String, node: String) {
-        val core = running()
-        val item = api(core, "/proxies/${encode(group)}")
+        val profile = selectedProfile()
+        val core = active?.takeIf { it.process.isAlive }
+        val item =
+            core?.let { api(it, "/proxies/${encode(group)}") }
+                ?: nodesFor(profile).optJSONObject(group)
+                ?: error("节点组不可用")
         check(item.optString("type").equals("Selector", ignoreCase = true)) { "请选择可手动切换的节点组" }
         val options = item.optJSONArray("all") ?: JSONArray()
         require((0 until options.length()).any { options.optString(it) == node }) { "节点不在此组中" }
-        api(core, "/proxies/${encode(group)}", "PUT", JSONObject().put("name", node))
+        profiles.save(profile.copy(selectedNodes = profile.selectedNodes + (group to node)))
+        try {
+            if (core != null)
+                api(core, "/proxies/${encode(group)}", "PUT", JSONObject().put("name", node))
+        } catch (error: Exception) {
+            profiles.save(profile)
+            throw error
+        }
     }
 
-    suspend fun delay(name: String): Int = locked {
+    suspend fun delay(name: String): Int =
+        withContext(Dispatchers.IO) {
+            measureDelay(running(), name)
+        }
+
+    suspend fun measureAll(onResult: suspend (Map<String, Int>) -> Unit) =
+        withContext(Dispatchers.IO) {
+            val (core, names) =
+                locked {
+                    val core = running()
+                    val nodes = liveNodes(core, selectedProfile().id)
+                    val names =
+                        nodes
+                            .keys()
+                            .asSequence()
+                            .filter { !nodes.getJSONObject(it).has("all") }
+                            .filterNot {
+                                it in setOf("DIRECT", "REJECT", "REJECT-DROP", "PASS", "COMPATIBLE")
+                            }
+                            .toList()
+                    core to names
+                }
+            for (batch in names.chunked(8)) {
+                coroutineContext.ensureActive()
+                check(core === active && core.process.isAlive) { "代理已停止" }
+                val result = coroutineScope {
+                    batch
+                        .map { name -> async { name to measureDelay(core, name) } }
+                        .awaitAll()
+                        .toMap()
+                }
+                onResult(result)
+            }
+        }
+
+    private fun measureDelay(core: Core, name: String): Int = runCatching {
         api(
-                running(),
+                core,
                 "/proxies/${encode(name)}/delay?timeout=5000&url=${encode("https://www.gstatic.com/generate_204")}",
                 timeout = 7000,
             )
-            .getInt("delay")
+            .optInt("delay", -1)
+            .takeIf { it > 0 } ?: -1
     }
+        .getOrDefault(-1)
 
     suspend fun disconnect(id: String? = null) = locked {
         api(running(), "/connections" + if (id == null) "" else "/${encode(id)}", "DELETE")
@@ -334,20 +458,68 @@ internal class MihomoManager private constructor(private val context: Context) {
         addRule(type, domain, target)
     }
 
-    private fun addRule(type: String, domain: String, target: String) {
-        require(type in setOf("DOMAIN", "DOMAIN-SUFFIX", "DOMAIN-KEYWORD")) { "规则类型不支持" }
-        require(domain.length in 1..253 && domain.matches(Regex("[a-zA-Z0-9][a-zA-Z0-9.-]*"))) {
-            "域名或关键词无效"
-        }
-        require(target.length in 1..120 && target.none { it == ',' || it.isISOControl() }) {
-            "规则目标无效"
-        }
-        check(api(running(), "/proxies").getJSONObject("proxies").has(target)) { "请使用现有节点或策略组" }
-        val profile = profiles.read(mutable.value.profileId)
-        val prefix = "$type,${domain.lowercase()},"
-        val newRules = listOf(prefix + target) + profile.rules.filterNot { it.startsWith(prefix) }
-        check(newRules.size <= 100) { "最多 100 条本地规则" }
-        applyProfile(profile.copy(rules = newRules))
+    private fun addRule(type: String, domain: String, target: String) =
+        writeRule(null, type, domain, target, false)
+
+    suspend fun ruleRows(): List<ProxyRuleRow> = locked { proxyRuleRows(selectedProfile()) }
+
+    suspend fun ruleTargets(): List<String> = locked { targets(selectedProfile()) }
+
+    private fun targets(profile: ProxyProfile) =
+        (listOf("DIRECT", "REJECT", "REJECT-DROP", "PASS") + nodesFor(profile).keys().asSequence())
+            .distinct()
+
+    suspend fun editRule(
+        row: ProxyRuleRow?,
+        type: String,
+        value: String,
+        target: String,
+        noResolve: Boolean,
+    ) = locked { writeRule(row, type, value, target, noResolve) }
+
+    private fun writeRule(
+        row: ProxyRuleRow?,
+        type: String,
+        value: String,
+        target: String,
+        noResolve: Boolean,
+    ) {
+        val profile = selectedProfile()
+        check(target in targets(profile)) { "请选择已有节点或策略组" }
+        val rule = formatProxyRule(type, value, target, noResolve)
+        if (row != null) check(row in proxyRuleRows(profile)) { "规则已变化，请重新打开编辑器" }
+        val updated =
+            if (row?.original != null)
+                profile.copy(ruleOverrides = profile.ruleOverrides + (row.original to rule))
+            else {
+                val local = profile.rules.toMutableList()
+                if (row != null) local[row.index] = rule
+                else {
+                    val entry = ProxyRuleRow(0, rule)
+                    val existing = local.indexOfFirst {
+                        val prior = ProxyRuleRow(0, it)
+                        prior.type == entry.type && prior.value == entry.value
+                    }
+                    if (existing < 0) local.add(0, rule) else local[existing] = rule
+                }
+                check(local.size <= 100) { "最多 100 条本地规则" }
+                profile.copy(rules = local)
+            }
+        applyProfile(updated)
+    }
+
+    suspend fun deleteRule(row: ProxyRuleRow) = locked {
+        val profile = selectedProfile()
+        check(row in proxyRuleRows(profile)) { "规则已变化，请刷新" }
+        val updated =
+            if (row.original == null)
+                profile.copy(rules = profile.rules.toMutableList().apply { removeAt(row.index) })
+            else
+                profile.copy(
+                    ruleOverrides = profile.ruleOverrides - row.original,
+                    removedRules = profile.removedRules + row.original,
+                )
+        applyProfile(updated)
     }
 
     suspend fun removeRule(rule: String) = locked {
@@ -359,8 +531,11 @@ internal class MihomoManager private constructor(private val context: Context) {
         val settings = mutable.value
         when (action) {
             "status" -> {
-                check(settings.agentNodes || settings.agentRules) { "Agent 代理管理已关闭" }
-                val proxies = api(running(), "/proxies").getJSONObject("proxies")
+                check(settings.agentStart || settings.agentNodes || settings.agentRules) {
+                    "Agent 代理管理已关闭"
+                }
+                val proxies =
+                    if (settings.profileId.isBlank()) JSONObject() else nodesFor(selectedProfile())
                 val groups =
                     proxies
                         .keys()
@@ -384,9 +559,20 @@ internal class MihomoManager private constructor(private val context: Context) {
                         .toList()
                 JSONObject()
                     .put("groups", JSONArray(groups))
-                    .put("mode", api(running(), "/configs").optString("mode"))
+                    .put("running", settings.running)
+                    .put(
+                        "mode",
+                        if (settings.running) api(running(), "/configs").optString("mode")
+                        else if (settings.profileId.isNotBlank()) selectedProfile().mode else "",
+                    )
+                    .put("canStart", settings.agentStart)
                     .put("canSelectNode", settings.agentNodes)
                     .put("canEditRules", settings.agentRules)
+            }
+            "start" -> {
+                check(settings.agentStart) { "用户未允许 Agent 启动代理" }
+                startCore()
+                JSONObject().put("message", "Mihomo 已启动")
             }
             "select" -> {
                 check(settings.agentNodes) { "用户未允许 Agent 切换节点" }
@@ -426,6 +612,8 @@ internal class MihomoManager private constructor(private val context: Context) {
                 JSONObject().put("path", config.absolutePath),
                 timeout = 16000,
             )
+            restoreChoices(core, profile)
+            runCatching { liveNodes(core, profile.id) }
         } finally {
             config.delete()
         }

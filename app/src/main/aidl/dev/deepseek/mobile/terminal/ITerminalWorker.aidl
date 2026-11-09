@@ -7,5 +7,6 @@ interface ITerminalWorker {
     void cancel(String id) = 3;
     String inspect(String spec) = 4;
     String readOnlyProbe() = 5;
+    void appSystemAction(String action, int userId) = 6;
     void destroy() = 16777114;
 }

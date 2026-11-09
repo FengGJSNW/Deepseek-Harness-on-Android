@@ -12,7 +12,7 @@ class OfficialBrowserTest {
     @get:Rule val ui = createAndroidComposeRule<MainActivity>()
 
     @Test
-    fun browserProviderSwitchesAndShowsMainAndChildRecords() {
+    fun workspaceShowsOfficialRecordsWithoutProviderButtons() {
         ui.waitUntil(30000) { AssistantState.ready }
         lateinit var session: Conversation
         lateinit var child: AgentWork
@@ -46,19 +46,15 @@ class OfficialBrowserTest {
         try {
             ui.onNodeWithContentDescription("打开功能区").performClick()
             ui.onNodeWithTag("workspace-tabs").assertDoesNotExist()
-            ui.onNodeWithText("内置浏览器").performClick()
-            ui.onNodeWithTag("browser-provider-local").assertIsSelected()
-            ui.onNodeWithTag("browser-provider-official").performClick().assertIsSelected()
+            ui.onNodeWithText("官方浏览记录").performClick()
             ui.onNodeWithTag("workspace-official-browser").assertIsDisplayed()
-            ui.runOnUiThread { assertEquals(BrowserProvider.OFFICIAL, session.browserProvider) }
+            ui.onNodeWithTag("browser-provider-local").assertDoesNotExist()
+            ui.onNodeWithTag("browser-provider-official").assertDoesNotExist()
             ui.onNodeWithText("官方测试搜索").performClick()
             ui.onNodeWithText("结果标题").assertIsDisplayed()
             ui.onNodeWithContentDescription("返回官方浏览记录").performClick()
             ui.onNodeWithText("官方抓取示例").performClick()
             ui.onNodeWithText("# 正文示例").assertIsDisplayed()
-            ui.onNodeWithTag("browser-provider-local").performClick().assertIsSelected()
-            ui.onNodeWithTag("workspace-official-browser").assertDoesNotExist()
-            ui.runOnUiThread { assertEquals(BrowserProvider.LOCAL, session.browserProvider) }
         } finally {
             ui.runOnUiThread {
                 WorkspaceState.reset()

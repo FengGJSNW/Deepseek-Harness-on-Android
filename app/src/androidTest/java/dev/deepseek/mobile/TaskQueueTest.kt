@@ -34,19 +34,22 @@ class TaskQueueTest : TestCase() {
         val fixture = keys.save("local-scheduler-test-only", "调度测试")
         js("window.__realRunTask=window.runTask;window.runTask=t=>{window.__heldTask=t}")
         try {
+            lateinit var a: Conversation
+            lateinit var first: PhoneTask
+            lateinit var second: PhoneTask
             main {
                 assertFalse(AssistantState.busy)
-                val a = AssistantState.addSession()
+                a = AssistantState.addSession()
                 a.access = "read"
                 service.resumeQueue()
                 service.send("queue-a")
-                val first = AssistantState.running!!
+                first = AssistantState.running!!
                 assertEquals(a.id, first.sessionId)
                 a.access = "full"
                 assertEquals("read", first.access)
                 val b = AssistantState.addSession()
                 service.send("queue-b")
-                val second = AssistantState.tasks.last()
+                second = AssistantState.tasks.last()
                 assertEquals("queued", second.status)
                 service.send("queue-c")
                 val cancelled = AssistantState.tasks.last()
@@ -66,6 +69,13 @@ class TaskQueueTest : TestCase() {
                 assertEquals("stopping", first.status)
                 assertEquals(first.id, AssistantState.activeTaskId)
                 service.onUiEvent("task_done", JSONObject().put("taskId", first.id).toString())
+            }
+            // Finalization writes context and file changes asynchronously on the service.
+            val stopDeadline = System.currentTimeMillis() + 15_000L
+            while (AssistantState.busy && System.currentTimeMillis() < stopDeadline) Thread.sleep(
+                50,
+            )
+            main {
                 assertTrue(AssistantState.queuePaused)
                 assertFalse(AssistantState.busy)
                 assertEquals("cancelled", second.status)

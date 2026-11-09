@@ -4,9 +4,18 @@ import java.net.URI
 import org.json.JSONArray
 import org.json.JSONObject
 
-internal enum class BrowserProvider(val key: String, val label: String) {
-    LOCAL("local", "本机"),
-    OFFICIAL("official", "官方");
+internal enum class BrowserProvider(
+    val key: String,
+    val label: String,
+    val chrome: Boolean,
+    val official: Boolean,
+) {
+    BLOCKED("blocked", "阻止联网", false, false),
+    LOCAL("local", "仅 Chrome", true, false),
+    OFFICIAL("official", "仅官方接口", false, true),
+    BOTH("both", "同时提供", true, true);
+
+    fun allows(tool: OfficialWebTool?) = if (tool == null) chrome else official
 
     companion object {
         fun parse(key: String) = entries.firstOrNull { it.key == key } ?: LOCAL

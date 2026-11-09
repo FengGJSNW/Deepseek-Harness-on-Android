@@ -4,7 +4,7 @@ import org.json.JSONObject
 
 internal data class OfficialSession(val path: String, val title: String)
 
-internal data class OfficialMessage(val role: String, val text: String)
+internal data class OfficialMessage(val role: String, val text: String, val reasoning: String = "")
 
 internal data class OfficialSnapshot(
     val url: String = "",
@@ -47,7 +47,12 @@ internal object OfficialChatDom {
                     val item = messages!!.getJSONObject(it)
                     val role = item.optString("role")
                     if (role !in setOf("user", "assistant", "system")) null
-                    else OfficialMessage(role, item.optString("text").take(60000))
+                    else
+                        OfficialMessage(
+                            role,
+                            item.optString("text").take(60000),
+                            item.optString("reasoning").take(60000),
+                        )
                 },
             unsupported = v.optBoolean("unsupported"),
             generating = v.optBoolean("generating"),
@@ -69,7 +74,7 @@ internal object OfficialChatDom {
           if (!window.__dshaOfficialObserver) {
             window.__dshaOfficialDirty = true;
             window.__dshaOfficialObserver = new MutationObserver(() => window.__dshaOfficialDirty = true);
-            window.__dshaOfficialObserver.observe(document.body,{childList:true,subtree:true,characterData:true,attributes:true,attributeFilter:['class','disabled','aria-disabled','aria-pressed']});
+            window.__dshaOfficialObserver.observe(document.body,{childList:true,subtree:true,characterData:true,attributes:true,attributeFilter:['class','disabled','aria-disabled','aria-pressed','aria-expanded','hidden']});
           }
           if (!window.__dshaOfficialDirty && window.__dshaOfficialUrl === location.href) return null;
           window.__dshaOfficialDirty = false; window.__dshaOfficialUrl = location.href;
@@ -82,11 +87,13 @@ internal object OfficialChatDom {
             .map(e => ({path:e.getAttribute('href'),title:(e.innerText||e.textContent||'对话').trim().slice(0,100)}));
           const nodes = [...document.querySelectorAll('.ds-message')].slice(-100);
           let unknown = false;
-          const text = root => {
+          const reasoningSelector = '.ds-think-content,.ds-think__content,.ds-reasoning-content,[data-testid="reasoning-content"],[data-message-role="reasoning"]';
+          const reasoningCache = window.__dshaReasoningCache ||= new WeakMap();
+          const text = (root, skip) => {
             const escape = value => value.replace(/([\`*_[\]#~<>])/g,'\$1');
             const walk = n => {
               if (n.nodeType === 3) return escape(n.textContent);
-              if (n.nodeType !== 1 || n.matches('button,[role=button],svg,script,style')) return '';
+              if (n.nodeType !== 1 || n === skip || n.matches('button,[role=button],svg,script,style')) return '';
               if (n.tagName === 'PRE') {
                 const code=n.querySelector('code')||n;
                 const source=code.innerText;
@@ -129,7 +136,13 @@ internal object OfficialChatDom {
           const messages = nodes.map(e => {
             const assistant = e.querySelector('.ds-assistant-message-main-content');
             const user = e.classList.contains('d29f3d7d') || e.getAttribute('data-message-role')==='user';
-            if (assistant) return {role:'assistant',text:text(assistant)};
+            const reasoningRoot = !user && e.querySelector(reasoningSelector);
+            if (assistant || reasoningRoot) {
+              const reasoning = reasoningRoot ? text(reasoningRoot) : '';
+              if (reasoning) reasoningCache.set(e, reasoning);
+              const reasoningCard = reasoningRoot?.closest?.('.ds-think,[data-testid="reasoning"]') || reasoningRoot;
+              return {role:'assistant',text:assistant ? text(assistant, reasoningCard) : '',reasoning:reasoningCache.get(e) || ''};
+            }
             if (user) {const body=e.querySelector('.eafda4ae,.fbb737a4')||e;return {role:'user',text:body.innerText.trim().slice(0,60000)};}
             unknown = true; return {role:'system',text:text(e)};
           }).filter(Boolean);

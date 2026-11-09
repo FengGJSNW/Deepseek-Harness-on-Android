@@ -336,11 +336,31 @@ class MainActivity : ComponentActivity() {
     }
 
     fun requestAccessibility() {
-        AssistantState.showAccessibilityInfo = true
+        requestDevicePermission("accessibility", "无障碍服务") {
+            AssistantState.showAccessibilityInfo = true
+        }
     }
 
     fun requestNotifications() {
         if (Build.VERSION.SDK_INT >= 33)
-            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 10)
+            requestDevicePermission("notifications", "消息通知") {
+                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 10)
+            }
+    }
+
+    fun requestFloating() {
+        requestDevicePermission("overlay", "悬浮窗权限") { AgentService.current?.setFloating(true) }
+    }
+
+    private fun requestDevicePermission(action: String, label: String, manual: () -> Unit) {
+        val level =
+            dev.deepseek.mobile.terminal.TerminalLevel.of(AssistantState.current.terminalLevel)
+        if (
+            !hasDevicePermission(action) &&
+                level.canManageOwnPermissions &&
+                AgentService.current?.terminal?.connections?.state(level)?.ready == true
+        ) {
+            DevicePermissionState.request = DevicePermissionRequest(level, action, label, manual)
+        } else manual()
     }
 }

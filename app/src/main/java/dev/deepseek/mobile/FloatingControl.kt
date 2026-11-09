@@ -14,6 +14,9 @@ class FloatingControl(private val service: AgentService) {
     private val manager = service.getSystemService(android.view.WindowManager::class.java)
     private var root: LinearLayout? = null
     private val review = PhoneReviewOverlay(service, manager)
+    val hasReviewWindow
+        get() = review.view?.isShown == true
+
     private var suppressed = 0
     private var avatar: ImageView? = null
     private var avatarResource = 0
@@ -260,7 +263,7 @@ class FloatingControl(private val service: AgentService) {
                     .distinct()
                     .joinToString("\n")
             }
-        if (root != null) review.update(task, suppressed != 0)
+        if (root != null || PhoneAccessibility.current != null) review.update(task, suppressed != 0)
     }
 
     internal suspend fun <T> withoutPanels(block: suspend () -> T): T {

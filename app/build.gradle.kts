@@ -23,8 +23,8 @@ android {
             else "dev.deepseek.mobile.test"
         minSdk = 30
         targetSdk = 35
-        versionCode = 30
-        versionName = "0.8.3"
+        versionCode = 31
+        versionName = "0.8.3.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         externalNativeBuild { cmake { cppFlags += "-std=c++17" } }
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
