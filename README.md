@@ -1,6 +1,6 @@
-# Deepseek Harness
+# Deepseek Harness on Android
 
-Deepseek Harness 是独立开发的 Android 助手。本仓库提供 0.8.3.1 的源码，应用要求 Android 11 或更新版本。
+Deepseek Harness on Android 是独立开发的 Android 助手。本仓库提供 0.8.3.1 的源码，应用要求 Android 11 或更新版本。
 
 - Work 会话通过用户配置的 DeepSeek API Key 调用模型，支持任务队列、子 Agent、终端和项目上下文。
 - 浏览器可选择 DeepSeek 官方网页搜索与抓取，也可使用本机 WebView 操作网页。
