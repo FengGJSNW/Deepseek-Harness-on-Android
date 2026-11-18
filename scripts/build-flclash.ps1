@@ -14,6 +14,13 @@ $linkType = if ($onWindows) { 'Junction' } else { 'SymbolicLink' }
 if (!(Test-Path $flutter)) { throw 'Set FLUTTER_ROOT to Flutter 3.47.6' }
 if (!(Test-Path "$source/plugins/prism_ui/pubspec.yaml")) { throw 'Prepare the pinned FlClash checkout and submodules first' }
 New-Item -ItemType Directory -Force $stage | Out-Null
+# A fresh checkout has no Flutter-generated Android wrapper.
+if (!(Test-Path (Join-Path $stage '.android/gradle/wrapper/gradle-wrapper.properties'))) {
+    $bootstrap = Join-Path $repo ('.tmp/flclash-bootstrap-' + [guid]::NewGuid().ToString('N'))
+    & $flutter create --template=module --project-name flclash --org dev.deepseek.mobile $bootstrap
+    if ($LASTEXITCODE -ne 0) { throw 'FlClash Flutter module initialization failed' }
+    Copy-Item -LiteralPath (Join-Path $bootstrap '.android') -Destination (Join-Path $stage '.android') -Recurse
+}
 $excluded = @('.git', '.dart_tool', '.android', 'android', 'ios', 'macos', 'linux', 'windows', 'build', '.idea', '.agents', '.github')
 Get-ChildItem -LiteralPath $source -Force | ForEach-Object {
     if ($_.Name -notin $excluded) {
@@ -65,6 +72,11 @@ try {
     $settings = $settings -replace '(?m)^org.gradle.workers.max=.*\r?\n?', ''
     $settings = $settings -replace '(?m)^org.gradle.jvmargs=.*\r?\n?', ''
     $settings += "`norg.gradle.workers.max=4`norg.gradle.jvmargs=-Xmx3g -XX:MaxMetaspaceSize=2g -Dfile.encoding=UTF-8`n"
+    # Kotlin incremental compilation cannot relate paths across Windows drives.
+    if ($onWindows) {
+        $settings = $settings -replace '(?m)^kotlin.incremental=.*\r?\n?', ''
+        $settings += "`nkotlin.incremental=false`n"
+    }
     [IO.File]::WriteAllText($properties, $settings)
     & $flutter build aar --no-debug --no-profile --target-platform=android-arm64,android-x64 --dart-define=DSHA_EMBEDDED=true "--dart-define=FLCLASH_VERSION=$($version[0])" "--dart-define=FLCLASH_BUILD_NUMBER=$($version[1])" --dart-define=APP_ENV=stable --no-pub
     if ($LASTEXITCODE -ne 0) { throw 'FlClash AAR build failed' }
