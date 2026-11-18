@@ -273,11 +273,10 @@ internal class PermissionManager(context: Context) {
                         Capability.GLOBAL_TOOLCHAIN,
                         Capability.CROSS_CONTEXT,
                     )
-        val globalMemory =
-            capability == Capability.MEMORY_WRITE && resource in setOf("global", "persona")
+        val personalMemory = capability == Capability.MEMORY_WRITE && resource == "persona"
         return PermissionResult(
-            if (elevated || globalMemory) PermissionEffect.ASK else PermissionEffect.ALLOW,
-            if (elevated || globalMemory) "此操作需要单独授权" else "默认允许当前工作域内的操作",
+            if (elevated || personalMemory) PermissionEffect.ASK else PermissionEffect.ALLOW,
+            if (elevated || personalMemory) "此操作需要单独授权" else "默认允许当前工作域内的操作",
         )
     }
 

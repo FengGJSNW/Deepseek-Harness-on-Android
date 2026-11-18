@@ -1,3 +1,4 @@
+import { workMode } from './workflow.ts';
 /** Independent kernels share only the native permission boundary and explicit messages. */
 export async function createTeam(create: any, rpc: any, notify: any, config: any) {
   const workers = new Map<string, any>();
@@ -26,6 +27,7 @@ export async function createTeam(create: any, rpc: any, notify: any, config: any
       signal?.throwIfAborted();
       if (closing) throw Error('任务已停止');
       if (
+        workMode(config) !== 'execute' ||
         parent ||
         config.isSubagent ||
         config.effort !== 'ultra' ||

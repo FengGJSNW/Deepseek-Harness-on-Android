@@ -27,7 +27,7 @@ class PhaseSevenTest {
             AssistantState.activeTaskId = ""
             AssistantState.addSession()
             WhaleCompanion.settle()
-            ReasoningState.selected = null
+            ReasoningState.close()
             WorkspaceState.reset()
             FilePreviewState.clear()
             ChangeState.show = false
@@ -480,20 +480,6 @@ class PhaseSevenTest {
             },
         )
         val memories = MemoryStore(ui.activity)
-        val a = memories.read("session", id)
-        memories.write("session", id, "only this chat", a.sha256)
-        assertEquals("", memories.read("session", UUID.randomUUID().toString()).text)
-        assertEquals("only this chat", memories.read("session", id).text)
-        ui.runOnUiThread {
-            ChangeState.taskId = task.id
-            ChangeState.show = true
-        }
-        ui.onNodeWithText("terminal/code.kt").performClick()
-        ui.onNodeWithText("- val old = 1").assertIsDisplayed()
-        TestSnapshots.capture(ui, "v070-diff")
-        ui.runOnUiThread {
-            ChangeState.show = false
-            ChangeState.selected = null
-        }
+        assertTrue(runCatching { memories.read("session", id) }.isFailure)
     }
 }

@@ -117,6 +117,8 @@ internal class ExtensionManager(
         worktreeId: String = task.id,
         ask: suspend (String, String) -> Boolean,
     ): HookResult {
+        if (task.workMode != dev.deepseek.mobile.workflow.WorkMode.EXECUTE)
+            return HookResult(JSONObject(arguments.toString()))
         var current = JSONObject(arguments.toString())
         val extra = StringBuilder()
         for (config in

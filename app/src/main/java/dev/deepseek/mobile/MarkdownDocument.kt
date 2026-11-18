@@ -22,6 +22,10 @@ internal sealed interface MarkdownBlock {
 
     data class Code(val language: String, val text: String) : MarkdownBlock
 
+    data class Fold(val title: String, val body: String, val initiallyOpen: Boolean) : MarkdownBlock
+
+    data class Formula(val raw: String) : MarkdownBlock
+
     data class Quote(val children: List<MarkdownBlock>) : MarkdownBlock
 
     data class Listing(val items: List<Item>) : MarkdownBlock
@@ -60,7 +64,77 @@ internal object MarkdownDocument {
     fun invalidate() = cache.evictAll()
 
     fun parse(raw: String): List<MarkdownBlock> =
-        cache.get(raw) ?: blocks(parser.parse(raw), 0).also { cache.put(raw, it) }
+        cache.get(raw) ?: parseDocument(raw).also { cache.put(raw, it) }
+
+    private val disclosureStart =
+        Regex(
+            "^ {0,3}<details( +open)? *> *(?:<summary>(.*?)</summary>)? *$",
+            RegexOption.IGNORE_CASE,
+        )
+    private val disclosureEnd = Regex("^ {0,3}</details> *$", RegexOption.IGNORE_CASE)
+    private val summaryLine = Regex("^ *<summary>(.*?)</summary> *$", RegexOption.IGNORE_CASE)
+    private val fenceLine = Regex("^ {0,3}(`{3,}|~{3,})(.*)$")
+
+    private fun parseDocument(raw: String): List<MarkdownBlock> {
+        if (!raw.contains("<details", ignoreCase = true)) return blocks(parser.parse(raw), 0)
+        val output = mutableListOf<MarkdownBlock>()
+        var fence = ""
+        var position = 0
+        var previousEnd = 0
+        var bodyStart = 0
+        var level = 0
+        var title: String? = null
+        var open = false
+        fun addPlain(text: String) {
+            if (text.isBlank()) return
+            if (MathDocument.containsMath(text)) output.add(MarkdownBlock.Formula(text))
+            else output.addAll(blocks(parser.parse(text), 0))
+        }
+        fun emit(end: Int) {
+            val rawBody = raw.substring(bodyStart, end).trim()
+            val summary =
+                if (title == null)
+                    summaryLine.matchEntire(rawBody.substringBefore('\n').trimEnd('\r'))
+                else null
+            val body =
+                if (summary != null) rawBody.substringAfter('\n', "").trimStart() else rawBody
+            output.add(
+                MarkdownBlock.Fold(title ?: summary?.groupValues?.get(1) ?: "详细内容", body, open),
+            )
+        }
+        for (original in raw.splitToSequence('\n')) {
+            val line = original.trimEnd('\r', ' ', '\t')
+            val begin = position
+            position += original.length + 1
+            val delimiter = fenceLine.matchEntire(line)
+            if (delimiter != null) {
+                val run = delimiter.groupValues[1]
+                if (fence.isEmpty()) fence = run
+                else if (
+                    run.first() == fence.first() &&
+                        run.length >= fence.length &&
+                        delimiter.groupValues[2].isBlank()
+                )
+                    fence = ""
+                continue
+            }
+            if (fence.isNotEmpty()) continue
+            val opening = disclosureStart.matchEntire(line)
+            if (opening != null) {
+                if (level++ == 0) {
+                    addPlain(raw.substring(previousEnd, begin))
+                    bodyStart = position.coerceAtMost(raw.length)
+                    title = opening.groups[2]?.value
+                    open = opening.groupValues[1].isNotBlank()
+                }
+            } else if (level > 0 && disclosureEnd.matches(line) && --level == 0) {
+                emit(begin)
+                previousEnd = position.coerceAtMost(raw.length)
+            }
+        }
+        if (level > 0) emit(raw.length) else addPlain(raw.substring(previousEnd))
+        return output
+    }
 
     private fun Node.nodes(): List<Node> = buildList {
         var n = firstChild
@@ -185,7 +259,9 @@ internal object MarkdownDocument {
                             fontFamily = DshaFonts.family(FontRole.BODY, weight = 600),
                         ),
                     ) {
+                        pushStringAnnotation(MarkdownSelection.inline, "**")
                         children()
+                        pop()
                     }
                 is Emphasis ->
                     withStyle(
@@ -194,12 +270,18 @@ internal object MarkdownDocument {
                             fontFamily = DshaFonts.family(FontRole.BODY, italic = true),
                         ),
                     ) {
+                        pushStringAnnotation(MarkdownSelection.inline, "*")
                         children()
+                        pop()
                     }
-                is Strikethrough ->
+                is Strikethrough -> {
+                    pushStringAnnotation(MarkdownSelection.inline, "~~")
                     withStyle(SpanStyle(textDecoration = TextDecoration.LineThrough)) { children() }
+                    pop()
+                }
                 is Code -> {
                     pushStringAnnotation(ReadingStyle.codeTag, n.literal)
+                    pushStringAnnotation(MarkdownSelection.inline, "code")
                     withStyle(
                         SpanStyle(
                             fontFamily = DshaFonts.mono,
@@ -214,6 +296,7 @@ internal object MarkdownDocument {
                         append(n.literal)
                     }
                     pop()
+                    pop()
                 }
                 is Link -> {
                     val url = n.destination
@@ -225,15 +308,19 @@ internal object MarkdownDocument {
                             ),
                         )
                     if (!safeLink(url)) children()
-                    else if (url.startsWith("dsha://file/"))
-                        withLink(
-                            LinkAnnotation.Clickable(url, style) {
-                                FilePreviewState.open(url.substringAfterLast('/'))
-                            },
-                        ) {
-                            children()
-                        }
-                    else withLink(LinkAnnotation.Url(url, style)) { children() }
+                    else {
+                        pushStringAnnotation(MarkdownSelection.inline, "link:$url")
+                        if (url.startsWith("dsha://file/"))
+                            withLink(
+                                LinkAnnotation.Clickable(url, style) {
+                                    FilePreviewState.open(url.substringAfterLast('/'))
+                                },
+                            ) {
+                                children()
+                            }
+                        else withLink(LinkAnnotation.Url(url, style)) { children() }
+                        pop()
+                    }
                 }
                 is org.commonmark.node.Image -> append(plain(n))
                 is HtmlInline ->

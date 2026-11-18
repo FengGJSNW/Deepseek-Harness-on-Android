@@ -31,8 +31,8 @@ internal object OfficialAuthDom {
         """
         (()=>{
           $helpers
-          const composer=document.querySelector('textarea:not([name*=captcha])');
-          const send=composer?.parentElement?.parentElement?.querySelector('.ds-button--primary[role=button]');
+          ${OfficialChatSelectors.script}
+          const send=dsha.primary;
           if(send && !/^\/(sign_|auth|login)/.test(location.pathname)) return {mode:'authenticated'};
           const password=fields().find(e=>e.type==='password');
           const code=fields().find(e=>e.autocomplete==='one-time-code'||e.placeholder==='请输入验证码'||e.placeholder==='Code');

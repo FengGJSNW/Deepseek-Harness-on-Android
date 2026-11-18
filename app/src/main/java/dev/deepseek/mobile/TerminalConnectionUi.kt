@@ -54,7 +54,7 @@ internal fun TerminalConnectionPanel(level: TerminalLevel, connections: Terminal
                 color = WhaleMuted,
             )
         if (!state.ready)
-            Button(
+            DshaButton(
                 onClick = { if (root) connections.connectRoot() else connections.connectShell() },
                 enabled = !state.pending,
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
@@ -62,9 +62,9 @@ internal fun TerminalConnectionPanel(level: TerminalLevel, connections: Terminal
                 Text(if (root) "连接并验证 Root" else "连接并验证 Shizuku")
             }
         FlowRow {
-            TextButton(onClick = { connections.refresh() }) { Text("检查连接", fontSize = 12.sp) }
+            DshaTextButton(onClick = { connections.refresh() }) { Text("检查连接", fontSize = 12.sp) }
             if (!root)
-                TextButton(
+                DshaTextButton(
                     onClick = {
                         runCatching {
                             val intent =
@@ -79,12 +79,12 @@ internal fun TerminalConnectionPanel(level: TerminalLevel, connections: Terminal
                     Text("打开 Shizuku", fontSize = 12.sp)
                 }
             if (state.ready || state.pending)
-                TextButton(onClick = { connections.disconnect(root) }) {
+                DshaTextButton(onClick = { connections.disconnect(root) }) {
                     Text("断开", fontSize = 12.sp)
                 }
         }
         if (state.ready) {
-            TextButton(
+            DshaTextButton(
                 onClick = {
                     probing = true
                     jobs.launch {

@@ -99,154 +99,32 @@ class RuntimeManagerTest {
         }
 
     @Test
-    fun temporaryLifecycleDropsEnvironmentButKeepsVersionedWorkspace() =
+    fun retiredImplicitRuntimesDoNotCreateMachinesOrFallbackToPhone() =
         runBlocking<Unit> {
+            org.junit.Assume.assumeTrue(android.os.Build.MODEL.contains("sdk_gphone"))
             val target = InstrumentationRegistry.getInstrumentation().targetContext
-            val directory = File(target.filesDir, "runtime-manager-qa").apply { mkdirs() }
+            val directory =
+                File(target.cacheDir, "retired-runtime-${UUID.randomUUID()}").apply { mkdirs() }
             val context =
                 object : ContextWrapper(target) {
                     override fun getFilesDir() = directory
                 }
-            val permissions = PermissionManager(context)
-            val workspaces = WorkspaceManager(context)
-            val manager = RuntimeManager(context, permissions, workspaces)
-            val session = UUID.randomUUID().toString()
-            val t = task(session)
-            val scope = manager.scope(t)
-            val evidence = JSONObject()
+            val manager =
+                RuntimeManager(context, PermissionManager(context), WorkspaceManager(context))
             try {
-                manager.selectKind(scope, RuntimeKind.ALPINE)
-                manager.selectLifetime(scope, RuntimeLifetime.TEMPORARY)
-                val first =
-                    manager.execute(
-                        t,
-                        "printf ephemeral > /root/custom-proof; printf retained > note.txt",
-                    )
-                assertEquals(0, first.getInt("exitCode"))
-                val merged =
-                    manager.resolveWorktree(
-                        workspaces.load(scope, t.id),
-                        true,
-                        PermissionContext(sessionId = session, actor = "user"),
-                    ) {
-                        true
-                    }
-                assertTrue(merged.getBoolean("merged"))
-                assertEquals("not_initialized", manager.info(scope).phase)
-                assertEquals("retained", File(workspaces.workspace(scope), "note.txt").readText())
-                val second =
-                    manager.execute(task(session), "test ! -e /root/custom-proof && cat note.txt")
-                assertEquals(0, second.getInt("exitCode"))
-                assertEquals("retained", second.getString("stdout"))
-                manager.close()
-                assertEquals("not_initialized", manager.info(scope).phase)
-                evidence
-                    .put("first", first)
-                    .put("second", second)
-                    .put("workspacePreserved", true)
-                    .put("passed", true)
-            } catch (error: Throwable) {
-                evidence.put("failure", error.stackTraceToString())
-                throw error
-            } finally {
-                manager.close()
-                File(target.filesDir, "v080-temporary-runtime.json").writeText(evidence.toString(2))
-                File(directory, "runtimes").deleteRecursively()
-            }
-        }
-
-    @Test
-    fun copyVerifiedEmptyToolchainForAppUiChecks() {
-        val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val source = File(context.filesDir, "runtime-manager-qa/toolchains/light-v1")
-        assertTrue(File(source, "ready.json").isFile)
-        val probes = JSONObject(File(source, "probes.json").readText())
-        for (name in listOf("git", "ssh", "python", "node", "npm")) assertEquals(
-            0,
-            probes.getJSONObject(name).getInt("exitCode"),
-        )
-        val target = File(context.filesDir, "toolchains/light-v1").apply { mkdirs() }
-        if (!File(target, "ready.json").exists()) {
-            File(source, "machine.state").copyTo(File(target, "machine.state"), overwrite = true)
-            File(source, "probes.json").copyTo(File(target, "probes.json"), overwrite = true)
-            File(source, "ready.json").copyTo(File(target, "ready.json"), overwrite = true)
-        }
-    }
-
-    @Test
-    fun projectWorktreesPackagesResetAndRealDevelopmentTools() =
-        runBlocking<Unit> {
-            val target = InstrumentationRegistry.getInstrumentation().targetContext
-            val directory = File(target.filesDir, "runtime-manager-qa").apply { mkdirs() }
-            val context =
-                object : ContextWrapper(target) {
-                    override fun getFilesDir() = directory
+                for (project in listOf("", UUID.randomUUID().toString())) {
+                    val request = task(UUID.randomUUID().toString(), project)
+                    val execute = runCatching { manager.execute(request, "id") }
+                    assertTrue(execute.exceptionOrNull()?.message.orEmpty().contains("Sandbox"))
+                    val terminal = runCatching { manager.openTerminal(request) }
+                    assertTrue(terminal.exceptionOrNull()?.message.orEmpty().contains("Sandbox"))
                 }
-            val permissions = PermissionManager(context)
-            val workspaces = WorkspaceManager(context)
-            val manager = RuntimeManager(context, permissions, workspaces)
-            val project = UUID.randomUUID().toString()
-            val scope = WorkspaceScope("project", project)
-            val sessionA = UUID.randomUUID().toString()
-            val sessionB = UUID.randomUUID().toString()
-            val a = task(sessionA, project)
-            val b = task(sessionB, project)
-            val evidence = JSONObject()
-            try {
-                manager.selectKind(scope, RuntimeKind.ALPINE)
-                workspaces.importFile(scope, "note.txt", "base".toByteArray())
-                val aResult =
-                    manager.execute(
-                        a,
-                        "set -e; cat note.txt; printf agent-a > note.txt; mkdir -p /usr/local/share; printf shared > /usr/local/share/project-proof",
-                    )
-                assertEquals(0, aResult.getInt("exitCode"))
-                val bResult =
-                    manager.execute(
-                        b,
-                        "set -e; cat note.txt; cat /usr/local/share/project-proof; printf agent-b > note.txt",
-                    )
-                evidence.put("a", aResult).put("b", bResult)
-                assertEquals("baseshared", bResult.getString("stdout"))
-                val treeA = workspaces.load(scope, a.id)
-                val treeB = workspaces.load(scope, b.id)
-                assertTrue(workspaces.merge(treeA).getBoolean("merged"))
-                assertFalse(workspaces.merge(treeB).getBoolean("merged"))
-                assertEquals("agent-a", File(workspaces.workspace(scope), "note.txt").readText())
-                File(context.filesDir, "memory.md").writeText("保留的长期记忆")
-                manager.reset(scope)
-                assertEquals("保留的长期记忆", File(context.filesDir, "memory.md").readText())
-                val reset =
-                    manager.execute(
-                        task(sessionA, project),
-                        "set -e; cat note.txt; test ! -e /usr/local/share/project-proof",
-                    )
-                evidence.put("reset", reset)
-                assertEquals(0, reset.getInt("exitCode"))
-                assertEquals("agent-a", reset.getString("stdout"))
-                val light = task(UUID.randomUUID().toString())
-                val tools =
-                    manager.execute(
-                        light,
-                        "set -e; python3 -c 'print(6 * 7)'; node -e 'console.log(6 * 7)'; git init -q; git -c user.name=DSHA -c user.email=qa@example.invalid commit --allow-empty -qm proof; git log -1 --format=%s; ssh-keygen -q -t ed25519 -N '' -f qa_key; ssh-keygen -l -f qa_key.pub",
-                        timeout = 120,
-                    )
-                evidence.put("tools", tools)
-                assertEquals(0, tools.getInt("exitCode"))
-                assertTrue(tools.getString("stdout").contains("42\n42"))
-                assertTrue(tools.getString("stdout").contains("proof"))
-                assertTrue(tools.getString("stdout").contains("ED25519"))
-                evidence.put("passed", true)
-            } catch (error: Throwable) {
-                evidence.put("failure", error.stackTraceToString())
-                throw error
+                assertTrue(manager.states.value.isEmpty())
+                assertTrue(File(directory, "runtimes/instances").listFiles().orEmpty().isEmpty())
             } finally {
-                withContext(NonCancellable) { manager.close() }
-                File(target.filesDir, "qa-v080")
-                    .apply { mkdirs() }
-                    .resolve("runtime-manager.json")
-                    .writeText(evidence.toString(2))
-                File(directory, "runtimes").deleteRecursively()
+                manager.close()
+                check(directory.canonicalFile.parentFile == target.cacheDir.canonicalFile)
+                directory.deleteRecursively()
             }
         }
 }

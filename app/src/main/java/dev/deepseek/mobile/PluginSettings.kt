@@ -77,15 +77,15 @@ internal fun PluginSettings(conversation: Conversation, onCreate: () -> Unit) {
                         )
                         Text(plugin.bundle.description, fontSize = 13.sp, maxLines = 3)
                         Row {
-                            TextButton({ opened = plugin.bundle.id }) { Text("详情") }
-                            TextButton(
+                            DshaTextButton({ opened = plugin.bundle.id }) { Text("详情") }
+                            DshaTextButton(
                                 {
                                     change { manager.store.setEnabled(plugin, !plugin.enabled) }
                                 },
                             ) {
                                 Text(if (plugin.enabled) "停用" else "启用")
                             }
-                            TextButton({ removal = plugin }) { Text("卸载", color = WhaleMuted) }
+                            DshaTextButton({ removal = plugin }) { Text("卸载", color = WhaleMuted) }
                         }
                     }
                 }
@@ -102,8 +102,8 @@ internal fun PluginSettings(conversation: Conversation, onCreate: () -> Unit) {
     removal?.let { plugin ->
         WhaleSheet("卸载 ${plugin.bundle.name}？", "插件将从所有工作会话移除。", { removal = null }) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                TextButton({ removal = null }) { Text("取消") }
-                TextButton(
+                DshaTextButton({ removal = null }) { Text("取消") }
+                DshaTextButton(
                     {
                         removal = null
                         change { manager.store.remove(plugin) }
@@ -139,7 +139,7 @@ private fun PluginDetail(
             )
         }
         Text(selected.description, fontSize = 13.sp, color = WhaleMuted)
-        TextButton({ showCode = !showCode }) { Text(if (showCode) "收起源码" else "查看源码") }
+        DshaTextButton({ showCode = !showCode }) { Text(if (showCode) "收起源码" else "查看源码") }
         if (showCode)
             SelectionContainer {
                 Text(selected.code, fontFamily = DshaFonts.mono, fontSize = 12.sp)
@@ -152,7 +152,7 @@ private fun PluginDetail(
             maxLines = 5,
             enabled = plugin.enabled && !running,
         )
-        TextButton(
+        DshaTextButton(
             onClick = {
                 val tool = selected
                 val raw = input

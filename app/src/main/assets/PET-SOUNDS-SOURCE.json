@@ -1,0 +1,15 @@
+{
+  "note": "Original press/release pair; artwork/audio are as-is, not MIT. See WHALE-PROVENANCE.md.",
+  "sounds": [
+    {
+      "source": "https://raw.githubusercontent.com/MeteorNOX/DeepSeek-Balance-Whale-Widget/5247dd6813d6e4430728f39ccc63d43cda046022/assets/Ya1.mp3",
+      "resource": "pet_press.mp3",
+      "sha256": "0ad8f934ae5fa3cbd42745e086a56aa6532766618c6a620b860a795bdc7689f9"
+    },
+    {
+      "source": "https://raw.githubusercontent.com/MeteorNOX/DeepSeek-Balance-Whale-Widget/5247dd6813d6e4430728f39ccc63d43cda046022/assets/Ya2.mp3",
+      "resource": "pet_release.mp3",
+      "sha256": "1a8998077e5e306c3088bb442ce36617261dd58200754f457469a520801c565b"
+    }
+  ]
+}

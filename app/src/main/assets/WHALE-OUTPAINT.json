@@ -1,0 +1,17 @@
+{
+  "resource": "drawable-nodpi/whale_chibi_expanded.png",
+  "sha256": "7494f37233dc59c202ca7471cdf66169a16f280827b98ab137f5f0ce15fce724",
+  "dimensions": [1254, 1254],
+  "background": "transparent RGBA",
+  "sourceResource": "drawable-nodpi/whale_chibi.png",
+  "sourceSha256": "dcc456613dbb1102a4b7ef636a8b622371e33b763489d6249c434fb54248ba5c",
+  "sourceRepository": "https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget",
+  "sourceCommit": "5247dd6813d6e4430728f39ccc63d43cda046022",
+  "sourcePath": "assets/DSniang1.png",
+  "method": "Codex built-in image_gen, local-image edit with transparent background",
+  "date": "2026-10-29",
+  "scope": "User-authorized extension of the cropped right and bottom silhouette. Same sleepy chibi whale maid identity; generated derivative, not pixel-identical to the source.",
+  "originalRetained": true,
+  "prompt": "WHALE-OUTPAINT-PROMPT.txt",
+  "rights": "Original asset provenance and rights scope remain in WHALE-PROVENANCE.md. This derivative is not declared MIT or wholly original artwork."
+}

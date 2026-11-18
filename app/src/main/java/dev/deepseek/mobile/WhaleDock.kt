@@ -119,6 +119,7 @@ private fun WhaleDockContent(
             },
         ) {
             WhalePet(
+                style = AssistantState.petStyle,
                 size = UiTuning.PetSize,
                 onDetails = onDetails,
                 showBubble = bubbleAllowed,

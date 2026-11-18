@@ -2,10 +2,12 @@ package dev.deepseek.mobile.runtime
 
 import android.content.Context
 import android.util.AtomicFile
+import dev.deepseek.mobile.harness.boundedBytes
 import java.io.File
-import java.net.URL
 import java.security.MessageDigest
+import javax.net.ssl.HttpsURLConnection
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -48,44 +50,108 @@ internal object RuntimeArtifacts {
     fun directory(context: Context) =
         File(context.filesDir, "runtimes/distributions/v86-linux68-v1")
 
-    suspend fun ensure(context: Context, progress: (String) -> Unit = {}) = lock.withLock {
-        withContext(Dispatchers.IO) {
-            val dir = directory(context).apply { mkdirs() }
-            artifacts.forEach { spec ->
-                val file = File(dir, spec.name)
-                if (file.isFile && file.length() == spec.bytes && hash(file) == spec.sha256)
-                    return@forEach
-                progress("下载并校验 ${spec.name}")
-                val atomic = AtomicFile(file)
-                val output = atomic.startWrite()
-                try {
-                    val connection =
-                        URL(spec.url).openConnection().apply {
-                            connectTimeout = 20000
-                            readTimeout = 30000
-                        }
-                    connection.getInputStream().use { input ->
-                        val buffer = ByteArray(65536)
-                        var count = 0L
-                        while (true) {
-                            val n = input.read(buffer)
-                            if (n < 0) break
-                            count += n
-                            check(count <= spec.bytes) { "Runtime image exceeds pinned size" }
-                            output.write(buffer, 0, n)
-                        }
-                        check(count == spec.bytes) { "Runtime image download incomplete" }
-                    }
-                    output.flush()
-                    check(hash(atomic.newFile()) == spec.sha256) {
-                        "Runtime image SHA-256 mismatch"
-                    }
-                    atomic.finishWrite(output)
-                } catch (error: Throwable) {
-                    atomic.failWrite(output)
-                    throw error
+    suspend fun importVerified(context: Context, specs: List<Artifact>, staged: File) =
+        lock.withLock {
+            withContext(Dispatchers.IO) {
+                val target = directory(context).canonicalFile.apply { mkdirs() }
+                for (spec in specs) {
+                    val file = File(target, spec.name).canonicalFile
+                    check(file.parentFile == target)
+                    if (file.isFile && file.length() == spec.bytes && hash(file) == spec.sha256)
+                        continue
+                    File(staged, spec.name).inputStream().use { copyVerified(file, spec, it) }
                 }
             }
+        }
+
+    /** apk verifies each signed index/archive inside the VM before using it. */
+    suspend fun lightRepositoryFile(
+        context: Context,
+        relative: String,
+        release: AlpineRelease = AlpineRelease.V324,
+        allowed: () -> Boolean = { true },
+    ): ByteArray =
+        withContext(Dispatchers.IO) {
+            require(
+                relative.matches(
+                    Regex("(?:main|community)/x86/(?:APKINDEX\\.tar\\.gz|[A-Za-z0-9._+~-]+\\.apk)"),
+                ),
+            )
+            check(allowed()) { "工具链需要下载，当前网络规则不允许初始化" }
+            RuntimeDownload.transfer(context) { port ->
+                val connection =
+                    RuntimeDownload.connection(
+                        "https://dl-cdn.alpinelinux.org/alpine/${release.branch}/$relative",
+                        port,
+                    ) as HttpsURLConnection
+                try {
+                    connection.connectTimeout = 20000
+                    connection.readTimeout = 30000
+                    connection.instanceFollowRedirects = false
+                    check(connection.responseCode == 200) {
+                        "镜像站返回 ${connection.responseCode}：$relative"
+                    }
+                    connection.inputStream.use { it.boundedBytes(128 * 1024 * 1024) }
+                } finally {
+                    connection.disconnect()
+                }
+            }
+        }
+
+    suspend fun ensure(
+        context: Context,
+        progress: (String) -> Unit = {},
+        release: AlpineRelease = AlpineRelease.V324,
+    ) = lock.withLock {
+        withContext(Dispatchers.IO) {
+            val image = release.artifact()
+            val dir = directory(context).apply { mkdirs() }
+            for (spec in artifacts.take(3) + image) {
+                val file = File(dir, spec.name)
+                if (file.isFile && file.length() == spec.bytes && hash(file) == spec.sha256)
+                    continue
+                check(spec.url.isNotEmpty()) { "本地镜像不可用，请重新导入镜像 ZIP" }
+                progress("下载并校验 ${spec.name}")
+                RuntimeDownload.transfer(context) { port ->
+                    val connection =
+                        RuntimeDownload.connection(spec.url, port) as HttpsURLConnection
+                    try {
+                        connection.connectTimeout = 20000
+                        connection.readTimeout = 30000
+                        connection.instanceFollowRedirects = false
+                        check(connection.responseCode == 200) {
+                            "镜像下载失败：${connection.responseCode}"
+                        }
+                        connection.inputStream.use { copyVerified(file, spec, it) }
+                    } finally {
+                        connection.disconnect()
+                    }
+                }
+            }
+        }
+    }
+
+    private suspend fun copyVerified(file: File, spec: Artifact, input: java.io.InputStream) {
+        val atomic = AtomicFile(file)
+        val output = atomic.startWrite()
+        try {
+            val buffer = ByteArray(65536)
+            var count = 0L
+            while (true) {
+                kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                val n = input.read(buffer)
+                if (n < 0) break
+                count += n
+                check(count <= spec.bytes) { "Runtime image exceeds pinned size" }
+                output.write(buffer, 0, n)
+            }
+            check(count == spec.bytes) { "Runtime image copy incomplete" }
+            output.flush()
+            check(hash(atomic.newFile()) == spec.sha256) { "Runtime image SHA-256 mismatch" }
+            atomic.finishWrite(output)
+        } catch (error: Throwable) {
+            atomic.failWrite(output)
+            throw error
         }
     }
 

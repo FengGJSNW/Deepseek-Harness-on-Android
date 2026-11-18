@@ -109,6 +109,7 @@ internal object OfficialChatNavigation {
                     if (r.isForMainFrame) {
                         loading = false
                         failure = "官方聊天暂时无法连接，请重试。"
+                        if (pendingSwitch) loginOpen = true
                     }
                 }
 
@@ -119,6 +120,7 @@ internal object OfficialChatNavigation {
                     cancelSend()
                     attachments.clear()
                     failure = "官方连接已退出，请重试。"
+                    if (pendingSwitch) loginOpen = true
                     loading = false
                     job?.cancel()
                     (v.parent as? android.view.ViewGroup)?.removeView(v)
@@ -131,13 +133,18 @@ internal object OfficialChatNavigation {
         browser.loadUrl("https://chat.deepseek.com/")
         job = scope.launch {
             while (isActive && view === browser) {
-                if (AssistantState.appMode == "chat" || loginOpen) runCatching { refresh() }
+                if (pendingSwitch || AssistantState.appMode == "chat" || loginOpen)
+                    runCatching { refresh() }
                 delay(650)
             }
         }
     }
 
     fun requestChat(context: Context) {
+        if (
+            view != null && (pendingSwitch || (AssistantState.appMode == "chat" && accessConfirmed))
+        )
+            return
         // Keep Work, its drawer and its draft in place until a fresh DOM confirms authentication.
         cancelSend()
         requestedPath = null
@@ -149,6 +156,12 @@ internal object OfficialChatNavigation {
         if (!accessConfirmed) AssistantState.appMode = "work"
         ensure(context)
         scope.launch { runCatching { refresh(force = true) } }
+    }
+
+    fun requestWork() {
+        if (pendingSwitch || loginOpen) cancelLogin()
+        AssistantState.appMode = "work"
+        AssistantState.persist()
     }
 
     fun cancelLogin() {
@@ -181,7 +194,9 @@ internal object OfficialChatNavigation {
         if (
             snapshot.authenticated &&
                 !snapshot.unsupported &&
-                (requestedPath == null || path == requestedPath)
+                (requestedPath == null ||
+                    path == requestedPath ||
+                    requestedPath == "/" && path.matches(Regex("/a/[a-zA-Z0-9_-]{1,64}/?")))
         ) {
             loading = false
             requestedPath = null
@@ -202,7 +217,7 @@ internal object OfficialChatNavigation {
                 cancelSend()
                 attachments.clear()
                 accessConfirmed = false
-                if (AssistantState.appMode == "chat") {
+                if (AssistantState.appMode == "chat" || pendingSwitch) {
                     AssistantState.appMode = "work"
                     pendingSwitch = true
                     loginOpen = true
@@ -480,10 +495,16 @@ internal object OfficialChatNavigation {
             finished(false)
             return
         }
-        val browser = view ?: return
+        val browser =
+            view
+                ?: run {
+                    failure = "官方页面未连接，请重试连接"
+                    finished(false)
+                    return
+                }
         val ticket = epoch
         val files = attachments.toList()
-        val actual = text.ifBlank { "请查看这些附件" }.take(32000)
+        val actual = text.take(32000)
         sending = true
         failure = ""
         fun ensureCurrent() {

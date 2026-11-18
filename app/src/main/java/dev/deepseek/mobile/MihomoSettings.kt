@@ -9,9 +9,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import dev.deepseek.mobile.harness.boundedBytes
 import dev.deepseek.mobile.proxy.MihomoManager
 import dev.deepseek.mobile.proxy.MihomoProfiles
@@ -28,10 +31,16 @@ import org.json.JSONObject
 internal fun MihomoSettings() {
     val context = LocalContext.current
     val manager = remember { MihomoManager.get(context) }
-    val state by manager.state.collectAsState()
+    val state by manager.state.collectAsStateWithLifecycle()
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
     val scope = rememberCoroutineScope()
     var profiles by remember { mutableStateOf(emptyList<ProxyProfile>()) }
-    var page by remember { mutableStateOf("配置") }
+    var page by remember { mutableStateOf("概览") }
+    var traffic by
+        remember(state.profileId, state.running) { mutableStateOf<ProxyTrafficSample?>(null) }
+    var trafficHistory by
+        remember(state.profileId, state.running) { mutableStateOf(emptyList<ProxyTrafficRate>()) }
+    var connectionCount by remember(state.profileId, state.running) { mutableStateOf<Int?>(null) }
     var loading by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("") }
     var payload by remember { mutableStateOf(JSONObject()) }
@@ -44,6 +53,8 @@ internal fun MihomoSettings() {
     var removing by remember { mutableStateOf<ProxyProfile?>(null) }
     var group by remember { mutableStateOf("") }
     var query by remember(page, group) { mutableStateOf("") }
+    var nodeSort by remember { mutableStateOf("默认") }
+    var hideUnavailable by remember { mutableStateOf(false) }
     var limit by remember(page, group, query) { mutableIntStateOf(40) }
     var delays by
         remember(state.profileId, state.running) { mutableStateOf(emptyMap<String, Int>()) }
@@ -52,7 +63,7 @@ internal fun MihomoSettings() {
     var ruleEdit by remember { mutableStateOf<ProxyRuleRow?>(null) }
     var ruleDelete by remember { mutableStateOf<ProxyRuleRow?>(null) }
     var measurement by remember { mutableStateOf<Job?>(null) }
-    LaunchedEffect(state.profileId, state.running) {
+    LaunchedEffect(state.profileId, state.running, page) {
         measurement?.cancel()
         measurement = null
     }
@@ -75,60 +86,86 @@ internal fun MihomoSettings() {
         }
     }
     LaunchedEffect(page, state.running, state.profileId, refresh) {
-        do {
-            try {
-                profiles = manager.list()
-                if (page == "规则") {
-                    ruleRows = if (state.profileId.isBlank()) emptyList() else manager.ruleRows()
-                    ruleTargets =
-                        if (state.profileId.isBlank()) emptyList() else manager.ruleTargets()
-                }
-                if (state.running) {
-                    config = manager.data("/configs")
-                    payload =
-                        when (page) {
-                            "节点" -> manager.data("/proxies")
-                            "连接" -> manager.data("/connections")
-                            else -> JSONObject()
-                        }
-                    if (page == "配置")
-                        providers =
-                            listOf("proxies", "rules").flatMap { kind ->
-                                val rows =
-                                    manager.data("/providers/$kind").optJSONObject("providers")
-                                        ?: JSONObject()
-                                rows
-                                    .keys()
-                                    .asSequence()
-                                    .sorted()
-                                    .map { name ->
-                                        Triple(
-                                            kind,
-                                            name,
-                                            rows
-                                                .optJSONObject(name)
-                                                ?.optString("vehicleType")
-                                                .orEmpty(),
-                                        )
-                                    }
-                                    .toList()
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            var first = true
+            var previousTraffic: ProxyTrafficSample? = null
+            do {
+                try {
+                    if (first) profiles = manager.list()
+                    if (page == "规则") {
+                        ruleRows =
+                            if (state.profileId.isBlank()) emptyList() else manager.ruleRows()
+                        ruleTargets =
+                            if (state.profileId.isBlank()) emptyList() else manager.ruleTargets()
+                    }
+                    if (state.running) {
+                        if (first) config = manager.data("/configs")
+                        payload =
+                            when (page) {
+                                "节点" -> manager.data("/proxies")
+                                "概览",
+                                "连接" -> manager.data("/connections")
+                                else -> JSONObject()
                             }
-                } else {
-                    config = JSONObject()
-                    payload =
-                        if (page == "节点" && state.profileId.isNotBlank()) manager.data("/proxies")
-                        else JSONObject()
-                    providers = emptyList()
+                        if (page in setOf("概览", "连接")) {
+                            connectionCount = payload.optJSONArray("connections")?.length()
+                            val next =
+                                if (payload.has("uploadTotal") && payload.has("downloadTotal"))
+                                    ProxyTrafficSample(
+                                        android.os.SystemClock.elapsedRealtime(),
+                                        payload.optLong("uploadTotal"),
+                                        payload.optLong("downloadTotal"),
+                                    )
+                                else null
+                            val rate = next?.let { proxyTrafficRate(previousTraffic, it) }
+                            if (next == null || (previousTraffic != null && rate == null))
+                                trafficHistory = emptyList()
+                            else if (rate != null)
+                                trafficHistory = (trafficHistory + rate).takeLast(30)
+                            previousTraffic = next
+                            traffic = next
+                        }
+                        if (page == "配置" && first)
+                            providers =
+                                listOf("proxies", "rules").flatMap { kind ->
+                                    val rows =
+                                        manager.data("/providers/$kind").optJSONObject("providers")
+                                            ?: JSONObject()
+                                    rows
+                                        .keys()
+                                        .asSequence()
+                                        .sorted()
+                                        .map { name ->
+                                            Triple(
+                                                kind,
+                                                name,
+                                                rows
+                                                    .optJSONObject(name)
+                                                    ?.optString("vehicleType")
+                                                    .orEmpty(),
+                                            )
+                                        }
+                                        .toList()
+                                }
+                    } else {
+                        config = JSONObject()
+                        payload =
+                            if (page == "节点" && state.profileId.isNotBlank())
+                                manager.data("/proxies")
+                            else JSONObject()
+                        providers = emptyList()
+                    }
+                    if (page == "日志") log = manager.logs()
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    status = error.message.orEmpty()
                 }
-                if (page == "日志") log = manager.logs()
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Exception) {
-                status = error.message.orEmpty()
-            }
-            if (page !in setOf("连接", "日志")) break
-            delay(1800)
-        } while (true)
+                first = false
+                if (page !in setOf("概览", "连接", "日志") || (!state.running && page != "日志")) break
+                delay(1800)
+            } while (true)
+        }
     }
     val pick =
         rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -145,27 +182,25 @@ internal fun MihomoSettings() {
                 }
         }
     val selected = profiles.firstOrNull { it.id == state.profileId }
-    SettingsStatusCard(
-        AppIcons.Globe,
-        if (state.running) "代理运行中" else "代理已停止",
-        selected?.name ?: "导入订阅或 YAML 后可启动代理",
-        tint = if (state.running) WhaleBlue else WhaleMuted,
-        announce = true,
-    )
-    Text("应用内网页和支持代理环境变量的终端命令可使用当前配置。", fontSize = 12.sp, lineHeight = 18.sp, color = WhaleMuted)
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Button(
-            enabled = !loading && selected != null,
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+        DshaTextButton(
             onClick = {
-                run {
-                    if (state.running) manager.stop() else manager.start()
-                }
+                status = ""
+                refresh++
             },
+            enabled = !loading,
         ) {
-            Text(if (state.running) "停止代理" else "启动代理")
+            Text("刷新")
         }
-        TextButton(enabled = !loading, onClick = { refresh++ }) { Text("刷新") }
     }
+    if (page != "概览")
+        SettingsStatusCard(
+            AppIcons.Globe,
+            if (state.running) "代理运行中" else "代理已停止",
+            selected?.name ?: "导入订阅或 YAML 后可启动代理",
+            tint = if (state.running) WhaleBlue else WhaleMuted,
+            announce = true,
+        )
     if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
     if (status.isNotBlank())
         SettingsStatusCard(
@@ -174,67 +209,108 @@ internal fun MihomoSettings() {
             tint = MaterialTheme.colorScheme.error,
             announce = true,
         )
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        listOf("配置", "节点", "规则", "连接", "日志").forEach { name ->
-            FilterChip(
-                selected = page == name,
-                onClick = {
-                    page = name
-                    payload = JSONObject()
-                },
-                label = { Text(name) },
-                colors = FilterChipDefaults.filterChipColors(selectedContainerColor = WhaleTint),
-            )
-        }
-    }
-    if (page == "配置") {
-        SectionLabel("流量与 Agent 权限")
-        ToggleSetting("应用内网页代理", "浏览工具及应用内网页使用 Mihomo", state.browser) {
-            run { manager.toggle("browser", it) }
-        }
-        ToggleSetting("终端代理", "给 Linux Sandbox、Shell 和 Root 命令设置代理环境变量", state.terminal) {
-            run { manager.toggle("terminal", it) }
-        }
-        ToggleSetting("允许 Agent 启动代理", "仅在 Agent 调用启动工具时启用当前配置", state.agentStart) {
-            run { manager.toggle("agentStart", it) }
-        }
-        ToggleSetting("允许 Agent 切换节点", "允许 Agent 选择当前配置已有节点", state.agentNodes) {
-            run { manager.toggle("agentNodes", it) }
-        }
-        ToggleSetting("允许 Agent 修改规则", "允许 Agent 为当前配置添加或替换域名规则", state.agentRules) {
-            run { manager.toggle("agentRules", it) }
-        }
-        ToggleSetting("自动更新订阅", "内核运行期间，每 24 小时更新使用中的订阅", state.autoUpdate) {
-            run { manager.toggle("autoUpdate", it) }
-        }
-        HorizontalDivider(color = WhaleLine)
-        SectionLabel("配置来源")
-        FlowRow {
-            TextButton(enabled = !loading, onClick = { add = "url" }) { Text("导入订阅") }
-            TextButton(enabled = !loading, onClick = { pick.launch(arrayOf("*/*")) }) {
-                Text("导入 YAML")
+    DshaSegments(
+        listOf("概览", "配置", "节点", "规则", "连接", "日志").map { it to it },
+        page,
+        {
+            page = it
+            payload = JSONObject()
+        },
+    )
+    if (page == "概览") {
+        MihomoDashboard(
+            state,
+            selected?.name,
+            loading,
+            config.optString("mode", selected?.mode.orEmpty()),
+            connectionCount,
+            traffic,
+            trafficHistory,
+            onPower = { run { if (state.running) manager.stop() else manager.start() } },
+            onMode = { mode -> run { manager.mode(mode) } },
+            onProfiles = { page = "配置" },
+            onConnections = { page = "连接" },
+        )
+        DshaCard {
+            DshaCardHeader(AppIcons.Browser, "代理范围")
+            ToggleSetting("应用内网页", "浏览工具与应用内网页", state.browser, enabled = !loading) {
+                run { manager.toggle("browser", it) }
             }
-            TextButton(enabled = !loading, onClick = { add = "text" }) { Text("粘贴 YAML") }
+            ToggleSetting("终端命令", "支持代理环境变量的命令", state.terminal, enabled = !loading) {
+                run { manager.toggle("terminal", it) }
+            }
+        }
+    } else if (page == "配置") {
+        SettingsGroup {
+            ToggleSetting(
+                "自动更新订阅",
+                "内核运行期间，每 24 小时更新使用中的订阅",
+                state.autoUpdate,
+                enabled = !loading,
+            ) {
+                run { manager.toggle("autoUpdate", it) }
+            }
+        }
+        DshaCard {
+            DshaCardHeader(AppIcons.Description, "添加配置")
+            FlowRow {
+                DshaButton(
+                    style = DshaButtonStyle.Plain,
+                    enabled = !loading,
+                    onClick = { add = "url" },
+                ) {
+                    Text("导入订阅")
+                }
+                DshaButton(
+                    style = DshaButtonStyle.Plain,
+                    enabled = !loading,
+                    onClick = { pick.launch(arrayOf("*/*")) },
+                ) {
+                    Text("导入 YAML")
+                }
+                DshaButton(
+                    style = DshaButtonStyle.Plain,
+                    enabled = !loading,
+                    onClick = { add = "text" },
+                ) {
+                    Text("粘贴 YAML")
+                }
+            }
         }
         for (profile in profiles) {
-            SettingsLink(
-                AppIcons.Description,
-                profile.name,
-                (if (profile.id == state.profileId) "使用中 · " else "") +
-                    if (profile.source.isBlank()) "本地配置" else "订阅",
-            ) {
-                run { manager.activate(profile.id) }
-            }
-            FlowRow {
-                if (profile.source.isNotBlank())
-                    TextButton(
+            DshaCard(padding = PaddingValues(8.dp)) {
+                SettingsLink(
+                    AppIcons.Description,
+                    profile.name,
+                    (if (profile.id == state.profileId) "使用中 · " else "") +
+                        if (profile.source.isBlank()) "本地配置" else "订阅",
+                ) {
+                    run { manager.activate(profile.id) }
+                }
+                FlowRow {
+                    if (profile.source.isNotBlank())
+                        DshaButton(
+                            style = DshaButtonStyle.Plain,
+                            enabled = !loading,
+                            onClick = { run { manager.refresh(profile.id) } },
+                        ) {
+                            Text("更新订阅")
+                        }
+                    DshaButton(
+                        style = DshaButtonStyle.Plain,
                         enabled = !loading,
-                        onClick = { run { manager.refresh(profile.id) } },
+                        onClick = { editing = profile },
                     ) {
-                        Text("更新订阅")
+                        Text("编辑 YAML")
                     }
-                TextButton(enabled = !loading, onClick = { editing = profile }) { Text("编辑 YAML") }
-                TextButton(enabled = !loading, onClick = { removing = profile }) { Text("删除") }
+                    DshaButton(
+                        style = DshaButtonStyle.Plain,
+                        enabled = !loading,
+                        onClick = { removing = profile },
+                    ) {
+                        Text("删除")
+                    }
+                }
             }
         }
         if (providers.isNotEmpty()) {
@@ -256,19 +332,16 @@ internal fun MihomoSettings() {
             Text(it, fontSize = 11.sp, fontFamily = DshaFonts.mono)
         }
     } else if (page == "节点") {
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf("rule" to "规则", "global" to "全局", "direct" to "直连").forEach { (mode, title) ->
-                FilterChip(
-                    selected = config.optString("mode").equals(mode, true),
-                    enabled = state.running && !loading,
-                    onClick = { run { manager.mode(mode) } },
-                    label = { Text(title) },
-                )
-            }
-        }
+        DshaSegments(
+            listOf("rule" to "规则", "global" to "全局", "direct" to "直连"),
+            config.optString("mode").lowercase(),
+            { mode -> run { manager.mode(mode) } },
+            enabled = state.running && !loading,
+        )
         if (!state.running) Text("显示上一次缓存的节点，选择将在下次启动时应用。", fontSize = 12.sp, color = WhaleMuted)
         Row(verticalAlignment = Alignment.CenterVertically) {
-            TextButton(
+            DshaButton(
+                style = DshaButtonStyle.Plain,
                 enabled = state.running && !loading,
                 onClick = {
                     if (measurement != null) measurement?.cancel()
@@ -277,15 +350,22 @@ internal fun MihomoSettings() {
                             try {
                                 status = ""
                                 delays = emptyMap()
+                                val measuredProfile = state.profileId
                                 manager.measureAll { batch ->
-                                    withContext(Dispatchers.Main) { delays = delays + batch }
+                                    withContext(Dispatchers.Main) {
+                                        if (
+                                            manager.state.value.profileId == measuredProfile &&
+                                                manager.state.value.running
+                                        )
+                                            delays = delays + batch
+                                    }
                                 }
                             } catch (cancelled: CancellationException) {
                                 throw cancelled
                             } catch (error: Exception) {
                                 status = error.message.orEmpty()
                             } finally {
-                                measurement = null
+                                if (measurement == coroutineContext[Job]) measurement = null
                             }
                         }
                 },
@@ -307,7 +387,12 @@ internal fun MihomoSettings() {
         val row = proxies.optJSONObject(name)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             groups.forEach { key ->
-                FilterChip(selected = name == key, onClick = { group = key }, label = { Text(key) })
+                DshaButton(
+                    onClick = { group = key },
+                    style = if (name == key) DshaButtonStyle.Filled else DshaButtonStyle.Tonal,
+                ) {
+                    Text(key)
+                }
             }
         }
         if (row != null) {
@@ -324,50 +409,53 @@ internal fun MihomoSettings() {
                 modifier = Modifier.fillMaxWidth(),
             )
             val all = row.optJSONArray("all") ?: JSONArray()
-            val nodes = List(all.length()) { all.optString(it) }.filter { it.contains(query, true) }
+            val nodes =
+                sortedProxyNodes(
+                    List(all.length()) { all.optString(it) }.filter { it.contains(query, true) },
+                    delays,
+                    nodeSort,
+                    hideUnavailable,
+                )
+            DshaSegments(listOf("默认", "延迟", "名称").map { it to it }, nodeSort, { nodeSort = it })
+            ToggleSetting("隐藏不可用节点", "未测速的节点仍然显示", hideUnavailable) { hideUnavailable = it }
             val selector = row.optString("type").equals("Selector", true)
             nodes.take(limit).chunked(2).forEach { pair ->
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     pair.forEach { node ->
                         val chosen = node == row.optString("now")
-                        Surface(
-                            modifier = Modifier.weight(1f),
-                            onClick = { run { manager.choose(name, node) } },
+                        MihomoNodeCard(
+                            node,
+                            proxies.optJSONObject(node)?.optString("type").orEmpty(),
+                            chosen,
+                            delays[node],
                             enabled = !loading && selector,
-                            shape = ContinuousShape(12.dp),
-                            color = if (chosen) WhaleTint else WhaleMist,
-                        ) {
-                            Column(Modifier.padding(horizontal = 9.dp, vertical = 7.dp)) {
-                                Text(
-                                    if (chosen) "✓ $node" else node,
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis,
-                                    fontSize = 13.sp,
-                                )
-                                TextButton(
-                                    enabled = state.running && !loading && measurement == null,
-                                    contentPadding = PaddingValues(0.dp),
-                                    modifier = Modifier.heightIn(min = 32.dp),
-                                    onClick = {
-                                        run { delays = delays + (node to manager.delay(node)) }
-                                    },
-                                ) {
-                                    Text(
-                                        delays[node]?.let { if (it > 0) "$it ms" else "不可用 · 重测" }
-                                            ?: "测速",
-                                        fontSize = 11.sp,
+                            canMeasure = state.running && !loading && measurement == null,
+                            modifier = Modifier.weight(1f),
+                            onSelect = { run { manager.choose(name, node) } },
+                            onMeasure = {
+                                run {
+                                    val measuredProfile = state.profileId
+                                    val result = manager.delay(node)
+                                    if (
+                                        manager.state.value.profileId == measuredProfile &&
+                                            manager.state.value.running
                                     )
+                                        delays = delays + (node to result)
                                 }
-                            }
-                        }
+                            },
+                        )
                     }
                     if (pair.size == 1) Spacer(Modifier.weight(1f))
                 }
             }
-            if (nodes.size > limit) TextButton(onClick = { limit += 40 }) { Text("显示更多") }
+            if (nodes.size > limit)
+                DshaButton(style = DshaButtonStyle.Plain, onClick = { limit += 40 }) {
+                    Text("显示更多")
+                }
         }
     } else if (page == "规则") {
-        TextButton(
+        DshaButton(
+            style = DshaButtonStyle.Plain,
             enabled = !loading && selected != null,
             onClick = {
                 ruleEdit = null
@@ -399,7 +487,8 @@ internal fun MihomoSettings() {
                         fontSize = 12.sp,
                     )
                 }
-                TextButton(
+                DshaButton(
+                    style = DshaButtonStyle.Plain,
                     enabled = !loading,
                     onClick = {
                         ruleEdit = rule
@@ -408,11 +497,18 @@ internal fun MihomoSettings() {
                 ) {
                     Text("编辑")
                 }
-                TextButton(enabled = !loading, onClick = { ruleDelete = rule }) { Text("删除") }
+                DshaButton(
+                    style = DshaButtonStyle.Plain,
+                    enabled = !loading,
+                    onClick = { ruleDelete = rule },
+                ) {
+                    Text("删除")
+                }
             }
             HorizontalDivider(color = WhaleLine)
         }
-        if (filtered.size > limit) TextButton(onClick = { limit += 40 }) { Text("显示更多") }
+        if (filtered.size > limit)
+            DshaButton(style = DshaButtonStyle.Plain, onClick = { limit += 40 }) { Text("显示更多") }
     } else if (!state.running) {
         SettingsStatusCard(AppIcons.Globe, "启动代理后查看$page")
     } else if (page == "连接") {
@@ -421,7 +517,11 @@ internal fun MihomoSettings() {
             "${connections.length()} 个连接 · ↑ ${proxyBytes(payload.optLong("uploadTotal"))} · ↓ ${proxyBytes(payload.optLong("downloadTotal"))}",
             fontSize = 13.sp,
         )
-        TextButton(enabled = !loading, onClick = { run { manager.disconnect() } }) {
+        DshaButton(
+            style = DshaButtonStyle.Plain,
+            enabled = !loading,
+            onClick = { run { manager.disconnect() } },
+        ) {
             Text("断开全部连接")
         }
         OutlinedTextField(
@@ -440,15 +540,32 @@ internal fun MihomoSettings() {
         rows.take(limit).forEach { item ->
             val metadata = item.optJSONObject("metadata") ?: JSONObject()
             val host = metadata.optString("host").ifBlank { metadata.optString("destinationIP") }
-            SettingsLink(
-                AppIcons.Browser,
-                "$host:${metadata.optString("destinationPort")}",
-                "${item.optJSONArray("chains")?.join(" → ").orEmpty()} · ↓ ${proxyBytes(item.optLong("download"))} · 断开",
-            ) {
-                run { manager.disconnect(item.getString("id")) }
+            DshaCard {
+                DshaCardHeader(AppIcons.Browser, "$host:${metadata.optString("destinationPort")}")
+                Text(
+                    item.optJSONArray("chains")?.join(" → ").orEmpty(),
+                    fontSize = 12.sp,
+                    color = DshaSurface.muted,
+                )
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "↓ ${proxyBytes(item.optLong("download"))} · ↑ ${proxyBytes(item.optLong("upload"))}",
+                        Modifier.weight(1f),
+                        fontSize = 11.sp,
+                        color = DshaSurface.muted,
+                    )
+                    DshaButton(
+                        onClick = { run { manager.disconnect(item.getString("id")) } },
+                        enabled = !loading,
+                        style = DshaButtonStyle.Danger,
+                    ) {
+                        Text("断开")
+                    }
+                }
             }
         }
-        if (rows.size > limit) TextButton(onClick = { limit += 40 }) { Text("显示更多") }
+        if (rows.size > limit)
+            DshaButton(style = DshaButtonStyle.Plain, onClick = { limit += 40 }) { Text("显示更多") }
     }
     val type = add
     if (type in setOf("url", "file", "text")) {
@@ -481,7 +598,7 @@ internal fun MihomoSettings() {
                     maxLines = if (type == "url") 1 else 9,
                     modifier = Modifier.fillMaxWidth(),
                 )
-            Button(
+            DshaButton(
                 enabled = !loading && name.isNotBlank() && content.isNotBlank(),
                 onClick = {
                     run {
@@ -512,7 +629,7 @@ internal fun MihomoSettings() {
                 maxLines = 11,
                 visualTransformation = UprightSymbols.transformation,
             )
-            Button(
+            DshaButton(
                 enabled = !loading,
                 onClick = {
                     run {
@@ -529,7 +646,7 @@ internal fun MihomoSettings() {
     }
     removing?.let { profile ->
         WhaleSheet("删除 ${profile.name}？", "删除配置及其本地规则", { removing = null }) {
-            Button(
+            DshaButton(
                 enabled = !loading,
                 onClick = {
                     run {
@@ -544,7 +661,7 @@ internal fun MihomoSettings() {
     }
     ruleDelete?.let { row ->
         WhaleSheet("删除规则？", row.raw, { ruleDelete = null }) {
-            Button(
+            DshaButton(
                 enabled = !loading,
                 onClick = {
                     run {
@@ -590,7 +707,7 @@ internal fun MihomoSettings() {
             ProxyRulePicker("代理策略", target, ruleTargets.map { it to it }) { target = it }
             if (ruleType in noResolveRuleTypes)
                 ToggleSetting("不解析域名", "仅匹配已有的 IP 地址", noResolve) { noResolve = it }
-            Button(
+            DshaButton(
                 enabled = !loading && (value.isNotBlank() || ruleType == "MATCH"),
                 onClick = {
                     run {
@@ -615,21 +732,20 @@ private fun ProxyRulePicker(
     select: (String) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
-    Box {
-        TextButton(onClick = { expanded = true }) { Text("$label · $chosen ▾") }
-        DropdownMenu(
-            expanded,
-            onDismissRequest = { expanded = false },
-            modifier = Modifier.heightIn(max = 320.dp),
-        ) {
-            choices.forEach { (key, text) ->
-                DropdownMenuItem(
-                    text = { Text(text) },
-                    onClick = {
-                        select(key)
-                        expanded = false
-                    },
-                )
+    LiquidMenuAnchor(
+        expanded,
+        { expanded = false },
+        toggleAnchor = true,
+        anchor = {
+            DshaButton(style = DshaButtonStyle.Plain, onClick = { expanded = !expanded }) {
+                Text("$label · $chosen ▾")
+            }
+        },
+    ) {
+        choices.forEach { (key, label) ->
+            GlassMenuRow(AppIcons.Check, label, selected = chosen == key) {
+                select(key)
+                expanded = false
             }
         }
     }
@@ -641,3 +757,20 @@ private fun proxyBytes(bytes: Long): String =
         bytes >= 1024 -> "${bytes / 1024} KiB"
         else -> "$bytes B"
     }
+
+@Composable
+internal fun MihomoAgentSettings() {
+    val context = LocalContext.current
+    val manager = remember(context) { MihomoManager.get(context) }
+    val state by manager.state.collectAsState()
+    val scope = rememberCoroutineScope()
+    fun toggle(key: String, value: Boolean) {
+        scope.launch {
+            runCatching { manager.toggle(key, value) }
+                .onFailure { AssistantState.error = it.message.orEmpty() }
+        }
+    }
+    ToggleSetting("允许 Agent 启动代理", "允许 Agent 启动当前配置", state.agentStart) { toggle("agentStart", it) }
+    ToggleSetting("允许 Agent 切换节点", "允许选择当前配置已有节点", state.agentNodes) { toggle("agentNodes", it) }
+    ToggleSetting("允许 Agent 修改规则", "允许添加或替换域名规则", state.agentRules) { toggle("agentRules", it) }
+}

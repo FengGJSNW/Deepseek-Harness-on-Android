@@ -41,6 +41,13 @@ const resolver = {
       return { path: file };
     });
     b.onResolve({ filter: /^node:/ }, (args) => {
+      if (args.path === 'node:util')
+        return {
+          path: path.join(
+            upstream,
+            'packages/experimental/webworker-runtime/src/node/builtin_modules/implemented/util.ts',
+          ),
+        };
       if (args.path === 'node:async_hooks')
         return {
           path: path.join(

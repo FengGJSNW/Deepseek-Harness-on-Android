@@ -43,28 +43,26 @@ internal fun ReasoningCard(c: Conversation, modifier: Modifier) {
         animateFloatAsState(if (child) 1f else 0f, spring(.86f, 420f), label = "model-depth")
     val shape = ContinuousShape(18.dp)
     Box(modifier.testTag("reasoning-panel").padding(top = (14f * depth.coerceIn(0f, 1f)).dp)) {
-        Surface(
+        Box(
             Modifier.fillMaxWidth()
                 .graphicsLayer {
                     scaleX = 1f - depth * .045f
                     scaleY = 1f - depth * .045f
                     translationY = -depth * 14.dp.toPx()
                 }
-                .floatingIslandShadow(shape)
+                .clip(shape)
                 .then(if (child) Modifier.clearAndSetSemantics {} else Modifier)
                 .testTag("root-model-panel"),
-            color = lerp(Color.White, Color(0xFFEFF1F5), depth.coerceIn(0f, 1f) * .7f),
-            shape = shape,
-            border = BorderStroke(.7.dp, WhaleLine),
         ) {
             Box(Modifier.graphicsLayer { alpha = (1f - depth).coerceIn(0f, 1f) }) {
                 ModelEffortBody(c, false, enabled = !child, showChildren = { child = true })
             }
         }
         if (child || depth > .001f)
-            Surface(
+            GlassCard(
                 Modifier.fillMaxWidth()
                     .graphicsLayer {
+                        alpha = depth.coerceIn(0f, 1f)
                         scaleX = .96f + depth * .04f
                         scaleY = .96f + depth * .04f
                         translationY = (1f - depth) * 6.dp.toPx()
@@ -72,13 +70,8 @@ internal fun ReasoningCard(c: Conversation, modifier: Modifier) {
                     .floatingIslandShadow(shape) { depth.coerceIn(0f, 1f) }
                     .then(if (!child) Modifier.clearAndSetSemantics {} else Modifier)
                     .testTag("child-model-panel"),
-                color = Color.White.copy(alpha = depth.coerceIn(0f, 1f)),
-                shape = shape,
-                border = BorderStroke(.7.dp, WhaleLine.copy(alpha = depth.coerceIn(0f, 1f))),
             ) {
-                Box(Modifier.graphicsLayer { alpha = depth.coerceIn(0f, 1f) }) {
-                    ModelEffortBody(c, true, enabled = child, back = { child = false })
-                }
+                ModelEffortBody(c, true, enabled = child, back = { child = false })
             }
     }
 }
@@ -91,6 +84,7 @@ private fun ModelEffortBody(
     showChildren: () -> Unit = {},
     back: () -> Unit = {},
 ) {
+    val haptics = rememberUiHaptics()
     val stops = if (child) effortStops.take(3) else effortStops
     val effort = if (child) c.childEffort else c.effort
     val model = if (child) c.childModel else c.model
@@ -112,6 +106,7 @@ private fun ModelEffortBody(
                 if (child)
                     IconButton(
                         onClick = {
+                            haptics.perform(UiHaptic.Selection)
                             modelExpanded = false
                             back()
                         },
@@ -133,7 +128,10 @@ private fun ModelEffortBody(
                 )
                 Row(
                     Modifier.clip(ContinuousShape(6.dp))
-                        .clickable(enabled = enabled) { modelExpanded = !modelExpanded }
+                        .clickable(enabled = enabled) {
+                            haptics.perform(UiHaptic.Selection)
+                            modelExpanded = !modelExpanded
+                        }
                         .padding(horizontal = 2.dp)
                         .semantics { contentDescription = if (child) "选择子智能体模型" else "选择模型" },
                     verticalAlignment = Alignment.CenterVertically,
@@ -155,21 +153,19 @@ private fun ModelEffortBody(
                     )
                 }
             }
-            IconButton(
-                onClick = {
-                    modelExpanded = false
-                    if (!child) showChildren()
-                },
-                enabled = enabled && !child,
-                modifier = Modifier.size(36.dp),
-            ) {
-                Icon(
-                    AppIcons.Agents,
-                    if (child) "子智能体设置" else "子智能体模型与强度",
-                    Modifier.size(20.dp),
-                    tint = if (child) WhaleMuted else WhaleInk,
-                )
-            }
+            if (child) Spacer(Modifier.width(36.dp))
+            else
+                IconButton(
+                    onClick = {
+                        haptics.perform(UiHaptic.Selection)
+                        modelExpanded = false
+                        showChildren()
+                    },
+                    enabled = enabled,
+                    modifier = Modifier.size(36.dp),
+                ) {
+                    Icon(AppIcons.Agents, "子智能体模型与强度", Modifier.size(20.dp), tint = WhaleInk)
+                }
         }
         if (modelExpanded)
             Column(Modifier.fillMaxWidth()) {
@@ -180,7 +176,8 @@ private fun ModelEffortBody(
                                 .height(40.dp)
                                 .clip(ContinuousShape(10.dp))
                                 .background(if (model == value) WhaleTint else Color.Transparent)
-                                .clickable {
+                                .clickable(enabled = enabled) {
+                                    if (model != value) haptics.perform(UiHaptic.Selection)
                                     if (child) c.childModel = value else c.model = value
                                     AssistantState.persist()
                                     modelExpanded = false
@@ -195,7 +192,7 @@ private fun ModelEffortBody(
                     }
             }
         EffortRail(
-            index,
+            stops.indexOfFirst { it.value == effort }.coerceAtLeast(0),
             { previewIndex = it },
             {
                 previewIndex = null
@@ -203,7 +200,7 @@ private fun ModelEffortBody(
                 AssistantState.persist()
             },
             { previewIndex = null },
-            Modifier.fillMaxWidth().height(36.dp),
+            Modifier.fillMaxWidth().height(48.dp),
             stops,
             enabled = enabled,
         )

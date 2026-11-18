@@ -30,6 +30,7 @@ credentials.json
 
 # Dependencies and build or delivery output
 /upstream/
+/integrations/flclash/
 node_modules/
 /.npm-cache/
 /.tmp/

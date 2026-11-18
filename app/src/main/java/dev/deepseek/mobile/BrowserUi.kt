@@ -5,7 +5,6 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -15,7 +14,6 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
@@ -42,13 +40,14 @@ internal fun BrowserWorkspace(tab: BrowserTab?) {
     key(tab.id) {
         val chrome = ExperienceSettings.browserMode.chrome
         val canTouch = chrome && tab.userAccess
+        androidx.activity.compose.BackHandler(tab.userOwned && tab.view.canGoBack()) {
+            tab.view.goBack()
+        }
         Column(Modifier.fillMaxSize().testTag("workspace-browser")) {
             if (tab.userOwned) UserBrowserAddress(tab, chrome)
             else
                 Row(
-                    Modifier.fillMaxWidth()
-                        .background(Color.White)
-                        .padding(start = 12.dp, end = 4.dp),
+                    Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     SelectionContainer(Modifier.weight(1f)) {
@@ -59,7 +58,7 @@ internal fun BrowserWorkspace(tab: BrowserTab?) {
                             fontSize = 12.sp,
                         )
                     }
-                    TextButton(
+                    DshaTextButton(
                         enabled = chrome,
                         onClick = {
                             tab.userAccess = !tab.userAccess
@@ -70,7 +69,6 @@ internal fun BrowserWorkspace(tab: BrowserTab?) {
                     }
                 }
             if (tab.loading) LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp))
-            else HorizontalDivider(color = WhaleLine)
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 AndroidView(
                     factory = { context ->
@@ -137,6 +135,7 @@ internal fun BrowserWorkspace(tab: BrowserTab?) {
                             fontSize = 11.sp,
                         )
                     }
+                HeaderFade(Modifier.fillMaxWidth().height(18.dp).align(Alignment.TopCenter))
             }
         }
     }
@@ -175,21 +174,34 @@ private fun UserBrowserAddress(tab: BrowserTab, enabled: Boolean) {
             .onFailure { error = it.message.orEmpty() }
     }
     Row(
-        Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 4.dp),
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        SmallIcon(AppIcons.ArrowBack, "后退", enabled && tab.view.canGoBack()) { tab.view.goBack() }
-        OutlinedTextField(
+        PrismSearchField(
             draft,
             { draft = it.take(4096) },
-            Modifier.weight(1f).testTag("user-browser-address"),
+            "输入网址或关键词",
+            "前往",
+            ::go,
+            modifier = Modifier.weight(1f).height(48.dp),
+            fieldModifier = Modifier.testTag("user-browser-address"),
             enabled = enabled,
-            singleLine = true,
-            placeholder = { Text("输入网址或关键词") },
+            surface = true,
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
             keyboardActions = KeyboardActions(onGo = { go() }),
         )
-        TextButton(enabled = enabled && draft.isNotBlank(), onClick = { go() }) { Text("前往") }
+        DshaIconButton(
+            "关闭网页",
+            {
+                focus.clearFocus()
+                WorkspaceState.close(WorkspaceTab.Web(tab.id))
+            },
+            size = 48.dp,
+            glass = true,
+        ) {
+            Icon(AppIcons.Close, null, Modifier.size(21.dp), tint = WhaleInk)
+        }
     }
     if (!enabled)
         Text("请在设置中启用 Chrome 浏览。", Modifier.padding(12.dp), color = WhaleMuted, fontSize = 12.sp)

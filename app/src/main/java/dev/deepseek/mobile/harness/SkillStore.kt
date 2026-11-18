@@ -27,6 +27,7 @@ internal data class InstalledSkill(
 }
 
 internal class SkillStore(context: Context) {
+    private val assets = context.assets
     private val root = File(context.filesDir, "harness/skills").apply { mkdirs() }
 
     @Synchronized
@@ -114,20 +115,28 @@ internal class SkillStore(context: Context) {
             .sortedByDescending { it.projectId.isNotBlank() }
             .distinctBy { it.name }
 
-    fun catalog(projectId: String, allowed: (String) -> Boolean): JSONArray =
-        JSONArray(
-            visible(projectId)
+    fun catalog(projectId: String, allowed: (String) -> Boolean): JSONArray {
+        val installed = visible(projectId)
+        val guides =
+            BuiltinToolGuides.catalog.map { guide ->
+                installed.firstOrNull { it.name == guide.name } ?: guide
+            }
+        return JSONArray(
+            (guides + installed)
+                .distinctBy { it.name }
                 .filter { allowed(it.name) }
                 .take(30)
                 .map {
                     JSONObject().put("name", it.name).put("description", it.description.take(320))
                 },
         )
+    }
 
     @Synchronized
     fun read(projectId: String, name: String, path: String, offset: Int): JSONObject {
-        val skill = visible(projectId).firstOrNull { it.name == name } ?: error("技能未启用或不属于当前项目")
-        return readFile(skill.id, path, offset)
+        val skill = visible(projectId).firstOrNull { it.name == name }
+        if (skill != null) return readFile(skill.id, path, offset)
+        return BuiltinToolGuides.read(assets, name, path, offset)
     }
 
     @Synchronized

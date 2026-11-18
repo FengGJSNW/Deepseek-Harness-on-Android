@@ -118,7 +118,7 @@ internal fun CenterIsland(close: () -> Unit, content: @Composable () -> Unit) {
                     color = Color.White,
                     border = BorderStroke(.7.dp, WhaleLine),
                 ) {
-                    content()
+                    CompositionLocalProvider(LocalMenuInIsland provides true) { content() }
                 }
             }
         }

@@ -119,6 +119,86 @@ window.renderDocument = ({ html, size, line, family, weight, italic, ligatures }
   measure();
   document.fonts.ready.then(measure);
 };
+// Serialize only the selected DOM fragment. Never copy the full reply when a range is active.
+window.selectedMarkdown = () => {
+  const selection = window.getSelection();
+  if (!selection?.rangeCount || selection.isCollapsed) return '';
+  const range = selection.getRangeAt(0);
+  if (!article.contains(range.commonAncestorContainer)) return '';
+  const escape = (value) => value.replace(/[\\`*_\[\]<>~]/g, '\\$&');
+  const fence = (value, min = 1) =>
+    '`'.repeat(Math.max(min, 1 + Math.max(0, ...(value.match(/`+/g) || []).map((s) => s.length))));
+  const children = (node) => Array.from(node.childNodes, render).join('');
+  function render(node) {
+    if (node.nodeType === Node.TEXT_NODE) return escape(node.textContent);
+    if (node.nodeType !== Node.ELEMENT_NODE) return children(node);
+    if (node.matches('.code-header, .card-backdrop, .katex-html')) return '';
+    if (node.matches('.tex-source, .katex-display, .katex')) {
+      const tex = node.querySelector('annotation[encoding="application/x-tex"]')?.textContent;
+      if (tex) {
+        const display = node.matches('.katex-display') || !!node.querySelector('.katex-display');
+        return display ? `\n\n$$\n${tex}\n$$\n\n` : '$' + tex + '$';
+      }
+    }
+    if (node.matches('pre')) {
+      const code = node.querySelector('code');
+      if (!code) return '';
+      const text = code.textContent.replace(/\n$/, '');
+      const marker = fence(text, 3);
+      const lang = code.className.replace(/^language-/, '').replaceAll('`', '');
+      return `\n\n${marker}${lang}\n${text}\n${marker}\n\n`;
+    }
+    if (node.matches('code')) {
+      const text = node.textContent;
+      const marker = fence(text);
+      const pad = text.startsWith('`') || text.endsWith('`') || /^ .+ $/.test(text) ? ' ' : '';
+      return marker + pad + text + pad + marker;
+    }
+    if (node.matches('table')) {
+      const rows = Array.from(node.rows, (row) =>
+        Array.from(row.cells, (cell) => children(cell).trim().replace(/\|/g, '\\|')),
+      );
+      if (!rows.length || !rows[0].length) return '';
+      const row = (cells) => `| ${cells.join(' | ')} |`;
+      return `\n\n${row(rows[0])}\n${row(rows[0].map(() => '---'))}\n${rows.slice(1).map(row).join('\n')}\n\n`;
+    }
+    const content = children(node);
+    const tag = node.localName;
+    if (/^h[1-6]$/.test(tag)) return '\n\n' + '#'.repeat(Number(tag[1])) + ' ' + content + '\n\n';
+    if (tag === 'strong') return '**' + content.trim() + '**';
+    if (tag === 'em') return '*' + content.trim() + '*';
+    if (tag === 'del') return '~~' + content.trim() + '~~';
+    if (tag === 'a')
+      return `[${content}](<${(node.getAttribute('href') || '').replace(/[<>]/g, encodeURIComponent)}>)`;
+    if (tag === 'br') return ' '.repeat(2) + '\n';
+    if (tag === 'hr') return '\n\n---\n\n';
+    if (tag === 'p') return '\n\n' + content + '\n\n';
+    if (tag === 'li') return '- ' + content.trim().replaceAll('\n', '\n  ') + '\n';
+    if (tag === 'blockquote')
+      return (
+        '\n\n' +
+        content
+          .trim()
+          .split('\n')
+          .map((line) => '> ' + line)
+          .join('\n') +
+        '\n\n'
+      );
+    return content;
+  }
+  let fragment = range.cloneContents();
+  let parent = range.commonAncestorContainer;
+  if (parent.nodeType === Node.TEXT_NODE) parent = parent.parentElement;
+  const formula = parent.closest('.tex-source');
+  if (formula) return render(formula).trim();
+  while (parent && parent !== article) {
+    const wrapper = parent.cloneNode(false);
+    wrapper.append(fragment);
+    fragment = wrapper;
+    parent = parent.parentElement;
+  }
+  return render(fragment).trim().slice(0, 65536);
+};
 document.addEventListener('click', (event) => {
   const link = event.target.closest('a');
   if (link) {

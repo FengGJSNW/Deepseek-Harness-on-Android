@@ -1,0 +1,24 @@
+// Maven Central's public Google mirror is reachable on the development network.
+def mirror = { repositories ->
+    repositories.all { repository ->
+        if (repository instanceof MavenArtifactRepository &&
+            repository.url.host in ['repo.maven.apache.org', 'repo1.maven.org']) {
+            repository.url = uri('https://maven-central.storage-download.googleapis.com/maven2')
+        }
+    }
+}
+beforeSettings { settings ->
+    settings.pluginManagement.repositories.maven { url = uri('https://maven-central.storage-download.googleapis.com/maven2') }
+    settings.pluginManagement.repositories.gradlePluginPortal()
+    mirror(settings.pluginManagement.repositories)
+}
+settingsEvaluated { settings -> mirror(settings.dependencyResolutionManagement.repositories) }
+allprojects {
+    mirror(repositories)
+    mirror(buildscript.repositories)
+    // These local AARs are consumed by DSHA, not published as an SDK. Old plugin
+    // Dokka versions cannot document modern JDKs; no runtime code is omitted.
+    tasks.configureEach {
+        if (name.startsWith('javaDoc') && name.endsWith('Generation')) enabled = false
+    }
+}

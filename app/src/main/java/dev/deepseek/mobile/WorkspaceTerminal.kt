@@ -43,76 +43,96 @@ internal fun WorkspaceTerminal(conversation: Conversation) {
     }
     val active = job != null
     Column(Modifier.fillMaxSize().background(Color(0xFFFAFAF9)).testTag("workspace-terminal")) {
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text("终端 · ${level.title}", fontSize = 16.sp)
-                Text(
-                    if (enabled) manager?.workspace(level, conversation.id).orEmpty()
-                    else "当前会话未允许终端执行",
-                    fontSize = 11.sp,
-                    color = WhaleMuted,
-                )
-            }
-            if (active) TextButton(onClick = { job?.cancel() }) { Text("停止") }
-        }
-        HorizontalDivider(color = WhaleLine)
-        if (error.isNotBlank())
-            Text(error, Modifier.padding(12.dp), color = Color(0xFFA7443F), fontSize = 12.sp)
-        SelectionContainer(Modifier.weight(1f)) {
-            LazyColumn(
-                state = list,
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(14.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                if (runs.isEmpty())
-                    item {
+        FadingHeaderLayout(
+            Modifier.weight(1f),
+            height = 64.dp,
+            color = Color(0xFFFAFAF9),
+            header = {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("终端 · ${level.title}", fontSize = 16.sp)
                         Text(
-                            "命令在会话当前的终端级别执行。可以为每条命令指定工作目录。",
-                            fontSize = 13.sp,
-                            color = WhaleMuted,
-                        )
-                    }
-                items(runs, key = { it.id }) { run ->
-                    Column(Modifier.fillMaxWidth()) {
-                        Text(
-                            "$ " + run.command,
-                            fontFamily = DshaFonts.mono,
-                            fontSize = 13.sp,
-                            color = WhaleInk,
-                        )
-                        if (run.output.isNotEmpty())
-                            Text(run.output, fontFamily = DshaFonts.mono, fontSize = 12.sp)
-                        if (run.stderr.isNotEmpty())
-                            Text(
-                                run.stderr,
-                                fontFamily = DshaFonts.mono,
-                                fontSize = 12.sp,
-                                color = Color(0xFFA7443F),
-                            )
-                        val status =
-                            run.exitCode?.let { "退出码 $it" }
-                                ?: when (run.status) {
-                                    "denied" -> "命令未执行"
-                                    "cancelled" -> "已停止"
-                                    "failed" -> "执行失败"
-                                    "waiting" -> "等待确认"
-                                    else -> "正在处理…"
-                                }
-                        Text(
-                            listOf(
-                                    status,
-                                    run.reason.takeIf { it.isNotBlank() },
-                                    "输出已截断".takeIf { run.truncated },
-                                )
-                                .filterNotNull()
-                                .joinToString(" · "),
+                            if (enabled) manager?.workspace(level, conversation.id).orEmpty()
+                            else "当前会话未允许终端执行",
                             fontSize = 11.sp,
                             color = WhaleMuted,
                         )
+                    }
+                    if (active) DshaTextButton(onClick = { job?.cancel() }) { Text("停止") }
+                }
+            },
+        ) { topInset ->
+            SelectionContainer(Modifier.fillMaxSize()) {
+                LazyColumn(
+                    state = list,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding =
+                        PaddingValues(
+                            start = 14.dp,
+                            end = 14.dp,
+                            top = topInset + 14.dp,
+                            bottom = 14.dp,
+                        ),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    item {
+                        if (error.isNotBlank())
+                            Text(
+                                error,
+                                Modifier.padding(12.dp),
+                                color = Color(0xFFA7443F),
+                                fontSize = 12.sp,
+                            )
+                    }
+                    if (runs.isEmpty())
+                        item {
+                            Text(
+                                "命令在会话当前的终端级别执行。可以为每条命令指定工作目录。",
+                                fontSize = 13.sp,
+                                color = WhaleMuted,
+                            )
+                        }
+                    items(runs, key = { it.id }) { run ->
+                        Column(Modifier.fillMaxWidth()) {
+                            Text(
+                                "$ " + run.command,
+                                fontFamily = DshaFonts.mono,
+                                fontSize = 13.sp,
+                                color = WhaleInk,
+                            )
+                            if (run.output.isNotEmpty())
+                                Text(run.output, fontFamily = DshaFonts.mono, fontSize = 12.sp)
+                            if (run.stderr.isNotEmpty())
+                                Text(
+                                    run.stderr,
+                                    fontFamily = DshaFonts.mono,
+                                    fontSize = 12.sp,
+                                    color = Color(0xFFA7443F),
+                                )
+                            val status =
+                                run.exitCode?.let { "退出码 $it" }
+                                    ?: when (run.status) {
+                                        "denied" -> "命令未执行"
+                                        "cancelled" -> "已停止"
+                                        "failed" -> "执行失败"
+                                        "waiting" -> "等待确认"
+                                        else -> "正在处理…"
+                                    }
+                            Text(
+                                listOf(
+                                        status,
+                                        run.reason.takeIf { it.isNotBlank() },
+                                        "输出已截断".takeIf { run.truncated },
+                                    )
+                                    .filterNotNull()
+                                    .joinToString(" · "),
+                                fontSize = 11.sp,
+                                color = WhaleMuted,
+                            )
+                        }
                     }
                 }
             }
@@ -139,10 +159,10 @@ internal fun WorkspaceTerminal(conversation: Conversation) {
                 label = { Text("命令") },
                 textStyle = LocalTextStyle.current.copy(fontFamily = DshaFonts.mono),
             )
-            TextButton(
+            DshaTextButton(
                 enabled = enabled && !active && command.isNotBlank() && manager != null,
                 onClick = {
-                    val terminal = manager ?: return@TextButton
+                    val terminal = manager ?: return@DshaTextButton
                     val input = command
                     val cwd = directory
                     focus.clearFocus()
@@ -238,10 +258,10 @@ internal fun WorkspaceTerminal(conversation: Conversation) {
                 title = { Text("允许这条终端命令？") },
                 text = { Text(reason.ifBlank { "当前终端规则要求人工确认。" }) },
                 confirmButton = {
-                    TextButton(onClick = { decision.complete(true) }) { Text("执行一次") }
+                    DshaTextButton(onClick = { decision.complete(true) }) { Text("执行一次") }
                 },
                 dismissButton = {
-                    TextButton(onClick = { decision.complete(false) }) { Text("取消") }
+                    DshaTextButton(onClick = { decision.complete(false) }) { Text("取消") }
                 },
             )
         }

@@ -15,7 +15,7 @@ import org.commonmark.ext.gfm.tables.TableCell
 
 /** Cached Claude reply table: no outer frame, horizontal separators, open column spacing. */
 @Composable
-internal fun MarkdownTable(block: MarkdownBlock.Table) {
+internal fun MarkdownTable(block: MarkdownBlock.Table, path: String) {
     val measurer = rememberTextMeasurer()
     val density = LocalDensity.current
     val font = DshaFonts.family(FontRole.BODY)
@@ -139,7 +139,10 @@ internal fun MarkdownTable(block: MarkdownBlock.Table) {
                         widths.forEachIndexed { column, width ->
                             val cell = cells.getOrNull(column)
                             ProseText(
-                                cell?.text ?: androidx.compose.ui.text.AnnotatedString(""),
+                                MarkdownSelection.block(
+                                    cell?.text ?: androidx.compose.ui.text.AnnotatedString(""),
+                                    "cell:$path:$index:$column",
+                                ),
                                 Modifier.width(width)
                                     .padding(
                                         start = if (column == 0) 0.dp else 21.75.dp,

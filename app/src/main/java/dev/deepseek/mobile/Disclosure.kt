@@ -120,7 +120,12 @@ internal fun ActivityDivider(modifier: Modifier = Modifier) {
 }
 
 @Composable
-internal fun ThinkingDisclosure(entry: ChatEntry, owner: String, framed: Boolean = true) {
+internal fun ThinkingDisclosure(
+    entry: ChatEntry,
+    owner: String,
+    framed: Boolean = true,
+    liveText: (() -> String)? = null,
+) {
     var expanded by
         androidx.compose.runtime.saveable.rememberSaveable(owner, entry.taskId) {
             mutableStateOf(false)
@@ -141,14 +146,14 @@ internal fun ThinkingDisclosure(entry: ChatEntry, owner: String, framed: Boolean
                         Text(
                             entry.text,
                             Modifier.heightIn(max = 260.dp).verticalScroll(rememberScrollState()),
-                            fontFamily = DshaFonts.family(FontRole.BODY),
+                            fontFamily = DshaFonts.family(FontRole.UI),
                             fontSize = 13.sp,
                             lineHeight = 21.sp,
                             color = ReadingStyle.secondary,
                         )
                     }
-                    TextButton(
-                        onClick = { ReasoningState.open(entry, owner) },
+                    DshaTextButton(
+                        onClick = { ReasoningState.open(entry, owner, liveText) },
                         contentPadding = PaddingValues(top = 4.dp),
                     ) {
                         Text("单独查看", fontSize = 10.sp, color = WhaleMuted)

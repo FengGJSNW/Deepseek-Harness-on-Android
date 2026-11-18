@@ -1,0 +1,42 @@
+{
+  "repository": "https://github.com/PC2005-cloud/dsh-pet",
+  "commit": "f8fc9a8a18dafb9b3545b56b701ad7bc0fce2e89",
+  "images": [
+    {
+      "resource": "meme_ohjing",
+      "sha256": "96d954bd3f9d60e77273643a96b6c2a5c4680ed4d6a4b3f1fe087189cd8fdd8a"
+    },
+    {
+      "resource": "meme_ciallo",
+      "sha256": "8cc22d31effa951f6a9e6cbf26ec98c762b86f8569fa81d58e0b10c99db112b3"
+    },
+    {
+      "resource": "meme_cute",
+      "sha256": "4ac8a61a368d9ee43e58ca5f16db73dd9124ebb7d8ca2fd0486f2f969789dae5"
+    },
+    {
+      "resource": "meme_rice",
+      "sha256": "f01520b68b5526814adb9ee3d10e87f5f0ab76c9cea8159c28c09497194340ce"
+    },
+    {
+      "resource": "meme_full",
+      "sha256": "128afd60aef0c610261271806beb6df2dedd33f159d3cc65676a2f6fed613585"
+    },
+    {
+      "resource": "meme_opensource",
+      "sha256": "96d02fcef0801d2fc04d2c9d8c336b053842f3e949d81ebf97bf438741ced840"
+    },
+    {
+      "resource": "meme_pressure",
+      "sha256": "748d4c2664c6dc40380e883f9ec713a7c2a4fb410401d639111ae3cdbed15819"
+    },
+    {
+      "resource": "meme_vision",
+      "sha256": "8d25880a3f2c546dc4fb57e96954b16cdc254a0faf8945411d9af8f0025b19e7"
+    },
+    {
+      "resource": "meme_sleep",
+      "sha256": "c250e326c62c270cd04efc6f61013dff65b16f5be5d5d06cc1751a59443c155d"
+    }
+  ]
+}

@@ -2,11 +2,12 @@ package dev.deepseek.mobile
 
 import android.os.Build
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.*
@@ -15,6 +16,7 @@ import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.findRootCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalDensity
@@ -23,9 +25,50 @@ import androidx.compose.ui.unit.dp
 import kotlin.math.ceil
 
 /** One GPU display list of the messages, reused by the translucent chrome. No bitmap readback. */
-internal class ChatBackdrop(val layer: GraphicsLayer) {
+internal class ChatBackdrop(val layer: GraphicsLayer, val hostView: android.view.View? = null) {
     var viewport: LayoutCoordinates? = null
+    private var capturedCoordinates by mutableStateOf<LayoutCoordinates?>(null)
+
+    fun captureAt(coordinates: LayoutCoordinates) {
+        capturedCoordinates = coordinates
+    }
+
+    /** A sampled layer must never contain the pane that samples it (a RenderNode cycle). */
+    fun canSampleFrom(coordinates: LayoutCoordinates?): Boolean {
+        val captured = capturedCoordinates?.takeIf { it.isAttached } ?: return false
+        var ancestor = coordinates?.takeIf { it.isAttached } ?: return false
+        while (true) {
+            if (ancestor === captured) return false
+            ancestor = ancestor.parentCoordinates ?: return true
+        }
+    }
+
     var origin by mutableStateOf(Offset.Zero)
+    var revision by mutableIntStateOf(0)
+        private set
+
+    fun recorded() {
+        // Notify filtered consumers without subscribing the source to its own writes.
+        Snapshot.withoutReadObservation { revision++ }
+    }
+
+    fun positionInSource(coordinates: LayoutCoordinates, owner: android.view.View): Offset {
+        val viewport = viewport
+        if (
+            viewport != null &&
+                viewport.isAttached &&
+                viewport.findRootCoordinates() == coordinates.findRootCoordinates()
+        ) {
+            return positionOf(coordinates)
+        }
+        val from = IntArray(2)
+        val to = IntArray(2)
+        owner.getLocationOnScreen(from)
+        hostView?.getLocationOnScreen(to)
+        return coordinates.positionInRoot() +
+            Offset((from[0] - to[0]).toFloat(), (from[1] - to[1]).toFloat()) -
+            (viewport?.takeIf { it.isAttached }?.positionInRoot() ?: Offset.Zero)
+    }
 
     // Card transforms affect both layers equally. Sample relative to their shared viewport
     // so translating or scaling the card does not invalidate the glass display lists.
@@ -34,10 +77,18 @@ internal class ChatBackdrop(val layer: GraphicsLayer) {
             ?: coordinates.positionInRoot()
 }
 
-internal fun Modifier.chatBackdrop(source: ChatBackdrop) = onGloballyPositioned {
+internal fun Modifier.chatBackdrop(
+    source: ChatBackdrop,
+    dependencies: List<ChatBackdrop> = emptyList(),
+) = onGloballyPositioned {
+    source.captureAt(it)
     source.origin = source.positionOf(it)
 }
+// Keep source recording independent of chrome invalidations. Otherwise notifying
+// a lens could redraw the source, notify the lens again, and keep the frame alive.
+.graphicsLayer()
     .drawWithContent {
+        dependencies.forEach { it.revision }
         if (!drawContext.canvas.nativeCanvas.isHardwareAccelerated) {
             drawContent()
             return@drawWithContent
@@ -45,6 +96,7 @@ internal fun Modifier.chatBackdrop(source: ChatBackdrop) = onGloballyPositioned 
         source.layer.record(size = IntSize(size.width.toInt(), size.height.toInt())) {
             this@drawWithContent.drawContent()
         }
+        source.recorded()
         drawLayer(source.layer)
     }
 
@@ -56,6 +108,7 @@ internal fun FrostedGlass(
     radius: Float = 16f,
 ) {
     var position by remember { mutableStateOf(Offset.Zero) }
+    var coordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
     val blurLayer = rememberGraphicsLayer()
     val density = LocalDensity.current
     // Gaussian content has no sharp detail: downsampled filters preserve appearance while
@@ -73,19 +126,24 @@ internal fun FrostedGlass(
         modifier
             .then(
                 if (source != null)
-                    Modifier.onGloballyPositioned { position = source.positionOf(it) }
+                    Modifier.onGloballyPositioned {
+                        coordinates = it
+                        position = source.positionOf(it)
+                    }
                 else Modifier,
             )
             .clipToBounds(),
     ) {
         if (
             source == null ||
+                !source.canSampleFrom(coordinates) ||
                 Build.VERSION.SDK_INT < 31 ||
                 !drawContext.canvas.nativeCanvas.isHardwareAccelerated
         ) {
             drawRect(tint.copy(alpha = 1f))
             return@Canvas
         }
+        source.revision
         val offset = source.origin - position
         // Filter a halo as well as the visible crop. Clamping a cropped glyph repeats its
         // edge pixels and makes text pop as it crosses the chrome boundary.
@@ -113,45 +171,36 @@ internal fun FrostedGlass(
     }
 }
 
-/** Fixed 18dp blur through the header, then 18→12→6→0 with smooth crossfades below it. */
+/** One cached gradient draw. No backdrop sampling, offscreen targets or Gaussian passes. */
 @Composable
-internal fun HeaderBackdrop(source: ChatBackdrop?, modifier: Modifier) {
-    if (source == null) {
-        Box(modifier.background(Color.White))
-        return
-    }
-    Box(modifier.clipToBounds()) {
-        FrostedGlass(source, Modifier.matchParentSize(), Color.White.copy(alpha = .60f), 18f)
-        val statusTop = WindowInsets.statusBars.getTop(LocalDensity.current).toFloat()
-        listOf(12f, 6f, 0f).forEachIndexed { index, radius ->
-            Box(
-                Modifier.matchParentSize()
-                    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
-                    .drawWithContent {
-                        drawContent()
-                        val start = (statusTop + 58.dp.toPx() + index * 8.dp.toPx()) / size.height
-                        val end =
-                            (statusTop + 58.dp.toPx() + (index + 1) * 8.dp.toPx()) / size.height
-                        drawRect(
-                            Brush.verticalGradient(
-                                0f to Color.Transparent,
-                                start.coerceIn(0f, 1f) to Color.Transparent,
-                                end.coerceIn(0f, 1f) to Color.White,
-                                1f to Color.White,
-                            ),
-                            blendMode = BlendMode.DstIn,
-                        )
-                    },
-            ) {
-                FrostedGlass(
-                    source,
-                    Modifier.matchParentSize(),
-                    Color.White.copy(alpha = .60f * radius / 18f),
-                    radius,
-                )
-            }
-        }
-    }
+internal fun HeaderBackdrop(modifier: Modifier) {
+    HeaderFade(modifier)
+}
+
+@Composable
+internal fun HeaderFade(modifier: Modifier, color: Color = Color.White, fadeIn: Boolean = false) {
+    Box(
+        modifier.then(
+            Modifier.drawWithCache {
+                val stops =
+                    (0..16)
+                        .map { i ->
+                            val t = i / 16f
+                            val fade = ((t - .44f) / .56f).coerceIn(0f, 1f)
+                            val rise = if (fadeIn) (t / .32f).coerceIn(0f, 1f) else 1f
+                            val alpha =
+                                rise *
+                                    rise *
+                                    (3f - 2f * rise) *
+                                    (1f - fade * fade * (3f - 2f * fade))
+                            t to color.copy(alpha = color.alpha * alpha)
+                        }
+                        .toTypedArray()
+                val brush = Brush.verticalGradient(*stops)
+                onDrawBehind { drawRect(brush) }
+            },
+        ),
+    )
 }
 
 /** A clipped, progressively stronger Gaussian blur at the scrolling viewport's two edges. */

@@ -1,6 +1,7 @@
 package dev.deepseek.mobile
 
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import java.io.File
@@ -23,18 +24,18 @@ class OfficialChatControlsTest {
         <div class="ds-message"><article>未知格式仍可阅读</article></div>
         <section><div><textarea></textarea></div>
         <div class="ds-toggle-button" aria-pressed="false">深度思考</div><div class="ds-toggle-button" aria-pressed="false">智能搜索</div>
-        <input type="file" multiple><div role="button" class="ds-button--primary ds-button--disabled"><svg><path d="M8.3125 fixture"/></svg></div></section>
+        <input type="file" multiple><div role="button" class="ds-button--primary ds-button--disabled"><svg><path d="M8.3125 0.980206 fixture"/></svg></div></section>
         <script>
         window.fixtureClicks=0;window.fixtureAcknowledge=true;window.fixtureFiles=[];window.fixtureWait=450;let uploading=false;
         const input=document.querySelector('textarea'),button=document.querySelector('[role=button]');
-        const ready=()=>button.classList.toggle('ds-button--disabled',!input.value.trim()||uploading);
+        const ready=()=>button.classList.toggle('ds-button--disabled',(!input.value.trim()&&!window.fixtureFiles.length)||uploading);
         input.oninput=()=>setTimeout(ready,250);
         document.querySelectorAll('.ds-toggle-button').forEach(e=>e.onclick=()=>{const selected=e.getAttribute('aria-pressed')!=='true';e.setAttribute('aria-pressed',String(selected));e.classList.toggle('ds-toggle-button--selected',selected)});
         document.querySelector('input[type=file]').onchange=async(e)=>{uploading=true;ready();window.fixtureFiles=await Promise.all([...e.target.files].map(async f=>({name:f.name,text:await f.text()})));setTimeout(()=>{uploading=false;ready()},350)};
         button.onclick=()=>{
             if(button.classList.contains('ds-button--disabled'))return;window.fixtureClicks++;
             if(!window.fixtureAcknowledge)return;
-            const sent=input.value;button.classList.add('ds-button--disabled');
+            const sent=input.value;window.fixtureLastSent=sent;button.classList.add('ds-button--disabled');
             const acknowledge=()=>{const u=document.createElement('div');u.className='ds-message d29f3d7d';const body=document.createElement('div');body.className='fbb737a4';body.textContent=sent;u.append(body);document.body.insertBefore(u,document.querySelector('section'));
                 const a=document.createElement('div');a.className='ds-message';const r=document.createElement('div');r.className='ds-assistant-message-main-content';r.textContent='收到：'+sent;a.append(r);document.body.insertBefore(a,document.querySelector('section'));input.value='';ready();};if(window.fixtureHoldAck)window.fixtureResolveSend=acknowledge;else setTimeout(acknowledge,window.fixtureWait);
         };
@@ -73,6 +74,40 @@ class OfficialChatControlsTest {
     }
 
     @Test
+    fun currentComposerNestingAndUnknownIconsCannotTriggerWrongActions() {
+        ready()
+        js(
+            """
+            (()=>{ const host=document.querySelector('section');host.className='_77cefa5';
+            const input=document.querySelector('textarea');input.name='search';input.className='_27c9245';
+            const extra=document.createElement('div');input.parentNode.replaceChild(extra,input);extra.append(input);
+            const button=host.querySelector('[role=button]');button.classList.remove('ds-button--primary');button.classList.add('ds-button');
+            const link=document.createElement('a');link.href='/a/custom_agent/s/fixture_12345678';link.textContent='新版路由';document.body.prepend(link);
+            window.__dshaOfficialDirty=true; })();
+            """
+                .trimIndent(),
+        )
+        ui.waitUntil(10000) {
+            OfficialChatNavigation.snapshot.sessions.any {
+                it.path == "/a/custom_agent/s/fixture_12345678"
+            }
+        }
+        val snapshot =
+            js("window.__dshaOfficialDirty=true;" + OfficialChatDom.snapshotScript)
+                as org.json.JSONObject
+        assertFalse(snapshot.getBoolean("unsupported"))
+        assertTrue(snapshot.getBoolean("thinkingAvailable"))
+        js("document.querySelector('[role=button] svg path').setAttribute('d','M1 1L3 3');")
+        val result = js(OfficialChatDom.clickSendScript) as org.json.JSONObject
+        assertTrue(result.has("error"))
+        assertEquals(0, (js("window.fixtureClicks") as Number).toInt())
+        assertFalse(OfficialChatDom.sessionPath("//evil.example/a/chat/s/fixture-12345678"))
+        assertFalse(
+            OfficialChatDom.sessionPath("/a/chat/s/fixture-12345678?redirect=https://evil.example"),
+        )
+    }
+
+    @Test
     fun officialReasoningIsSeparateAndRemainsReadableAfterDomCollapse() {
         ready()
         js(
@@ -84,7 +119,9 @@ class OfficialChatControlsTest {
                 it.reasoning == "独立思考内容" && it.text == "官方旧回复1"
             }
         }
-        ui.onNodeWithText("思考过程", substring = true).performClick()
+        ui.onNodeWithTag("thinking-disclosure").assertIsDisplayed()
+        ui.onNodeWithTag("thinking-toggle").assertTextContains("思考过程").performClick()
+        ui.onNodeWithTag("thinking-body").assertIsDisplayed()
         ui.onNodeWithText("独立思考内容").assertIsDisplayed()
         js("document.querySelector('.ds-think').remove()")
         ui.waitForIdle()
@@ -116,7 +153,13 @@ class OfficialChatControlsTest {
             !OfficialChatNavigation.sending &&
                 OfficialChatNavigation.snapshot.messages.any { it.text == "收到：原生延迟发送" }
         }
-        ui.onNodeWithTag("official-composer").assertTextEquals("")
+        assertEquals(
+            "",
+            ui.onNodeWithTag("official-composer")
+                .fetchSemanticsNode()
+                .config[SemanticsProperties.EditableText]
+                .text,
+        )
         assertEquals(1, (js("window.fixtureClicks") as Number).toInt())
         assertTrue(OfficialChatNavigation.attachments.isEmpty())
         assertNull(OfficialChatNavigation.view!!.parent)
@@ -145,8 +188,9 @@ class OfficialChatControlsTest {
             ui.onNodeWithTag("official-send").assertIsEnabled().performClick()
             ui.waitUntil(15000) {
                 !OfficialChatNavigation.sending &&
-                    OfficialChatNavigation.snapshot.messages.any { it.text == "收到：请查看这些附件" }
+                    OfficialChatNavigation.snapshot.messages.any { it.text == "收到：" }
             }
+            assertEquals("", js("window.fixtureLastSent"))
             val files = js("window.fixtureFiles") as JSONArray
             assertEquals("official-attachment.txt", files.getJSONObject(0).getString("name"))
             assertEquals("attachment fixture only", files.getJSONObject(0).getString("text"))

@@ -9,7 +9,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 
-/** Play the two bundled tap sounds through SoundPool. */
+/** The upstream Ya1/Ya2 pair. No network, generated tone or platform sound resource. */
 internal object WhaleSounds {
     private var pool: SoundPool? = null
     private var audio: AudioManager? = null

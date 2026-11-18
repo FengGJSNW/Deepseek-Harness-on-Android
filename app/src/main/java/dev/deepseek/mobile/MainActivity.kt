@@ -31,6 +31,37 @@ class MainActivity : ComponentActivity() {
         return super.dispatchTouchEvent(event)
     }
 
+    private var proxyVpnResult: CompletableDeferred<Boolean>? = null
+    private val proxyVpnPermission =
+        registerForActivityResult(
+            androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult(),
+        ) { result ->
+            proxyVpnResult?.complete(
+                result.resultCode == RESULT_OK && android.net.VpnService.prepare(this) == null,
+            )
+            proxyVpnResult = null
+        }
+
+    internal suspend fun authorizeProxyVpn(): Boolean {
+        val intent = android.net.VpnService.prepare(this) ?: return true
+        check(lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) {
+            "需要 VPN 系统授权，请回到 DSHA 或打开 FlClash 完成授权后重试"
+        }
+        val pending =
+            proxyVpnResult
+                ?: CompletableDeferred<Boolean>().also {
+                    proxyVpnResult = it
+                    try {
+                        proxyVpnPermission.launch(intent)
+                    } catch (error: Exception) {
+                        proxyVpnResult = null
+                        it.completeExceptionally(error)
+                    }
+                }
+        // A cancelled Agent must not start the VPN after the user later accepts this prompt.
+        return pending.await()
+    }
+
     private var pickerSession = ""
     private var configImport: ((String) -> Unit)? = null
     private var configExport = ""
@@ -322,6 +353,8 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        proxyVpnResult?.complete(false)
+        proxyVpnResult = null
         if (current === this) current = null
         super.onDestroy()
     }

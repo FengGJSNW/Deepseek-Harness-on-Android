@@ -7,12 +7,11 @@ import androidx.compose.ui.test.onNodeWithTag
  */
 internal fun resetTransientUiForTest() {
     OfficialChatNavigation.cancelLogin()
-    ReasoningState.selected = null
+    ReasoningState.close()
     WorkspaceState.reset()
     FilePreviewState.clear()
     ChangeState.show = false
     ChangeState.selected = null
-    AssistantState.pendingMemory = null
     AssistantState.showAccessibilityInfo = false
 }
 

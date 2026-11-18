@@ -7,6 +7,12 @@ import org.json.JSONObject
 class WorkProject(val id: String = UUID.randomUUID().toString(), title: String) {
     var title by mutableStateOf(title)
     var collapsed by mutableStateOf(false)
+    var defaultSandboxId by mutableStateOf("")
 
-    fun json() = JSONObject().put("id", id).put("title", title).put("collapsed", collapsed)
+    fun json() =
+        JSONObject()
+            .put("id", id)
+            .put("title", title)
+            .put("collapsed", collapsed)
+            .put("defaultSandboxId", defaultSandboxId)
 }

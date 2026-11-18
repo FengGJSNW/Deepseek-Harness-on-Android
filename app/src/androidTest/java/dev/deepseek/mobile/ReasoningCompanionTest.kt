@@ -35,6 +35,8 @@ class ReasoningCompanionTest {
     fun modelAndEffortShareOnePopover() {
         ui.waitUntil(30000) { AssistantState.ready }
         ui.runOnUiThread {
+            resetTransientUiForTest()
+            AssistantState.appMode = "work"
             val c = AssistantState.addSession()
             c.effort = "max"
             AssistantState.petEnabled = false
@@ -59,28 +61,43 @@ class ReasoningCompanionTest {
             assertEquals("deepseek-v4-pro", AssistantState.current.model)
             assertEquals("ultra", AssistantState.current.effort)
         }
-        // A real swipe selects the low end, then a tap selects Ultra again.
-        ui.onNodeWithTag("reasoning-slider").performTouchInput { swipeLeft() }
+        val inset =
+            UiTuning.ReasoningThumbRadius.value * ui.activity.resources.displayMetrics.density
+        ui.onNodeWithTag("reasoning-slider").performTouchInput {
+            swipe(
+                androidx.compose.ui.geometry.Offset(width - inset, centerY),
+                androidx.compose.ui.geometry.Offset(inset, centerY),
+            )
+        }
         ui.runOnUiThread { assertTrue(AssistantState.current.effort in listOf("low")) }
         ui.onNodeWithTag("reasoning-slider").performTouchInput { click(centerRight) }
+        ui.runOnUiThread { assertEquals("low", AssistantState.current.effort) }
+        ui.onNodeWithTag("reasoning-slider").performTouchInput {
+            swipe(
+                androidx.compose.ui.geometry.Offset(inset, centerY),
+                androidx.compose.ui.geometry.Offset(width - inset, centerY),
+            )
+        }
         ui.runOnUiThread { assertEquals("ultra", AssistantState.current.effort) }
         ui.onNodeWithContentDescription("选择模型").performClick()
         screen("v034-models-inline")
         androidx.test.platform.app.InstrumentationRegistry.getInstrumentation()
             .sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
         ui.onNodeWithTag("reasoning-panel").assertDoesNotExist()
-        ui.onNodeWithContentDescription("新对话").performClick()
+        ui.onNodeWithContentDescription("会话列表").performClick()
+        ui.onNode(hasText("新对话") and SemanticsMatcher.keyNotDefined(SemanticsActions.OnLongClick))
+            .performClick()
         ui.runOnUiThread { assertEquals("low", AssistantState.current.effort) }
         ui.onNodeWithContentDescription("模型与思考设置").performClick()
         ui.onNodeWithTag("reasoning-slider").performSemanticsAction(SemanticsActions.SetProgress) {
             it(1f)
         }
-        ui.runOnUiThread { assertEquals("medium", AssistantState.current.effort) }
+        ui.runOnUiThread { assertEquals("high", AssistantState.current.effort) }
         androidx.test.platform.app.InstrumentationRegistry.getInstrumentation()
             .sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
         ui.activityRule.scenario.recreate()
         ui.runOnUiThread {
-            assertEquals("medium", AssistantState.current.effort)
+            assertEquals("high", AssistantState.current.effort)
             val data =
                 org.json.JSONObject(
                     java.io.File(ui.activity.filesDir, "conversations-v3.json").readText(),
@@ -90,7 +107,7 @@ class ReasoningCompanionTest {
                 (0 until sessions.length())
                     .map { sessions.getJSONObject(it) }
                     .first { it.getString("id") == AssistantState.selectedId }
-            assertEquals("medium", match.getString("effort"))
+            assertEquals("high", match.getString("effort"))
         }
     }
 

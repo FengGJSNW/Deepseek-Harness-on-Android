@@ -89,6 +89,13 @@ class WorkspaceIdentityTest {
             ui.onNodeWithText("资料核对").performClick()
             ui.onNodeWithText("资料核对内容").assertIsDisplayed()
             title.assertTextEquals("当前工作会话")
+            val opened = ui.runOnIdle { WorkspaceState.tabs.toList() }
+            ui.onNodeWithContentDescription("隐藏标签页").performClick()
+            ui.onNodeWithTag("workspace-tabs").assertDoesNotExist()
+            ui.onNodeWithText("资料核对内容").assertIsDisplayed()
+            ui.onNodeWithContentDescription("显示标签页").performClick()
+            ui.onNodeWithTag("workspace-tabs").assertIsDisplayed()
+            ui.runOnIdle { assertEquals(opened, WorkspaceState.tabs.toList()) }
             ui.onNodeWithContentDescription("工作区工具").performClick()
             ui.onNodeWithText("内置浏览器").performClick()
             ui.onNodeWithTag("user-browser-address").assertIsDisplayed()

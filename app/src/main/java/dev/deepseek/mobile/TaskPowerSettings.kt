@@ -43,6 +43,7 @@ internal fun TaskPowerSettings(conversation: Conversation) {
                 AssistantState.error = "无法打开该系统页面，请在系统设置中搜索应用省电策略"
             }
     }
+    SectionLabel("会话保活")
     ToggleSetting("任务保活", "执行期间保持 CPU 唤醒，完成或停止时释放", ExperienceSettings.keepTasksAwake) {
         ExperienceSettings.keepTasksAwake = it
         ExperienceSettings.save()
@@ -73,6 +74,15 @@ internal fun TaskPowerSettings(conversation: Conversation) {
             ExperienceSettings.privilegedKeepAlive = it
             ExperienceSettings.save()
         }
+    SectionLabel("Sandbox 保活")
+    ToggleSetting(
+        "保持 Sandbox 后台运行",
+        "运行中的实例显示通知，可重启或停止。已有 Shell / Root 连接时辅助放宽休眠限制。Android 重启服务后从最近检查点恢复。",
+        ExperienceSettings.keepSandboxesAwake,
+    ) {
+        ExperienceSettings.keepSandboxesAwake = it
+        ExperienceSettings.save()
+    }
 }
 
 internal data class DevicePermissionRequest(
@@ -111,7 +121,7 @@ internal fun DevicePermissionPrompt() {
         if (failure.isNotBlank())
             Text(failure, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            TextButton(
+            DshaTextButton(
                 enabled = !running,
                 onClick = {
                     close()
@@ -120,7 +130,7 @@ internal fun DevicePermissionPrompt() {
             ) {
                 Text("手动开启")
             }
-            Button(
+            DshaButton(
                 enabled = !running,
                 onClick = {
                     running = true

@@ -22,16 +22,28 @@ object AppIcons {
             )
             .build()
 
-    val RightWorkspace by lazy {
-        icon(
-            "RightWorkspace",
-            "M6.5 4H17.5Q21 4 21 7.5V16.5Q21 20 17.5 20H6.5Q3 20 3 16.5V7.5Q3 4 6.5 4ZM15 4V20",
-        )
-    }
     val Agents by lazy {
         icon(
             "Agents",
             "M7 11V7Q7 4 10 4H14Q17 4 17 7V11M5 11H19V20H5ZM9 15H9.1M15 15H15.1M9 18H15M12 1V4M2 14H5M19 14H22",
+        )
+    }
+    internal const val rightWorkspacePath =
+        "M6.5 4H17.5Q21 4 21 7.5V16.5Q21 20 17.5 20H6.5Q3 20 3 16.5V7.5Q3 4 6.5 4ZM15 4V4Q15 4 15 4H15Q15 4 15 4V20Q15 20 15 20"
+    val RightWorkspace by lazy { icon("RightWorkspace", rightWorkspacePath) }
+    internal const val workspaceTabsPath =
+        "M6 7H14Q17 7 17 10V18Q17 21 14 21H6Q3 21 3 18V10Q3 7 6 7ZM7 4.8V4.8Q7 3 9.5 3H18Q21 3 21 6V14Q21 16.5 19 17"
+    val WorkspaceTabs by lazy { icon("WorkspaceTabs", workspaceTabsPath) }
+    val RemoteRelay by lazy {
+        icon(
+            "RemoteRelay",
+            "M3 10V8.5Q3 6 5.5 6H19M15.5 2.5L19 6L15.5 9.5M21 14V15.5Q21 18 18.5 18H5M8.5 14.5L5 18L8.5 21.5",
+        )
+    }
+    val RemoteComputer by lazy {
+        icon(
+            "RemoteComputer",
+            "M4.5 5H13M19.5 10V15Q19.5 17.5 17 17.5H5Q2.5 17.5 2.5 15V7.5Q2.5 5 4.5 5M11 17.5V21M7 21H15M14 10L21 3M16.5 3H21V7.5",
         )
     }
     val Globe by lazy {
@@ -54,6 +66,9 @@ object AppIcons {
         )
     }
     val Stop by lazy { icon("Stop", "M6 6H18V18H6Z") }
+    val Markdown by lazy {
+        icon("Markdown", "M3.5 18V6L8 12L12.5 6V18M18 6V18M14.5 14.5L18 18L21.5 14.5")
+    }
     val ShieldOff by lazy {
         icon("ShieldOff", "M12 3L20 6V12Q20 17.5 12 21Q4 17.5 4 12V6ZM8.5 9L15.5 16M15.5 9L8.5 16")
     }
@@ -75,31 +90,31 @@ object AppIcons {
     val TerminalBox by lazy {
         icon(
             "TerminalBox",
-            "M5 4H19Q21 4 21 6V12M12 20H5Q3 20 3 18V6Q3 4 5 4ZM7 8L10 11L7 14M12 14H14M18 14L22 16V20L18 22L14 20V16ZM14 16L18 18L22 16M18 18V22",
+            "M5 4H19Q21 4 21 6V12M12 20H5Q3 20 3 18V6Q3 4 5 4M7 8L10 11L7 14M12 14H14M18 14L22 16V20L18 22L14 20V16ZM14 16L18 18L22 16M18 18V22",
         )
     }
     val TerminalUser by lazy {
         icon(
             "TerminalUser",
-            "M5 4H19Q21 4 21 6V12M12 20H5Q3 20 3 18V6Q3 4 5 4ZM7 8L10 11L7 14M12 14H14M20.5 15.5A2.5 2.5 0 1 1 15.5 15.5A2.5 2.5 0 1 1 20.5 15.5M14 22Q14 18.5 18 18.5Q22 18.5 22 22",
+            "M5 4H19Q21 4 21 6V12M12 20H5Q3 20 3 18V6Q3 4 5 4M7 8L10 11L7 14M12 14H14M20.5 15.5A2.5 2.5 0 1 1 15.5 15.5A2.5 2.5 0 1 1 20.5 15.5M14 22Q14 18.5 18 18.5Q22 18.5 22 22",
         )
     }
     val TerminalShell by lazy {
         icon(
             "TerminalShell",
-            "M5 4H19Q21 4 21 6V12M12 20H5Q3 20 3 18V6Q3 4 5 4ZM7 8L10 11L7 14M12 14H14M19 13L14 18H18L17 22L22 17H18Z",
+            "M5 4H19Q21 4 21 6V12M12 20H5Q3 20 3 18V6Q3 4 5 4M7 8L10 11L7 14M12 14H14M19 13L14 18H18L17 22L22 17H18Z",
         )
     }
     val TerminalGuard by lazy {
         icon(
             "TerminalGuard",
-            "M5 4H19Q21 4 21 6V12M12 20H5Q3 20 3 18V6Q3 4 5 4ZM7 8L10 11L7 14M12 14H14M18 13L22 15V18Q22 20 18 22Q14 20 14 18V15ZM16 17L18 19L20 16",
+            "M5 4H19Q21 4 21 6V12M12 20H5Q3 20 3 18V6Q3 4 5 4M7 8L10 11L7 14M12 14H14M18 13L22 15V18Q22 20 18 22Q14 20 14 18V15ZM16 17L18 19L20 16",
         )
     }
     val TerminalRoot by lazy {
         icon(
             "TerminalRoot",
-            "M5 4H19Q21 4 21 6V12M12 20H5Q3 20 3 18V6Q3 4 5 4ZM7 8L10 11L7 14M12 14H14M16.5 14L15.5 22M20.5 14L19.5 22M14 17H22M13.5 20H21.5",
+            "M5 4H19Q21 4 21 6V12M12 20H5Q3 20 3 18V6Q3 4 5 4M7 8L10 11L7 14M12 14H14M16.5 14L15.5 22M20.5 14L19.5 22M14 17H22M13.5 20H21.5",
         )
     }
     val Terminal by lazy {
@@ -190,7 +205,7 @@ object AppIcons {
     val Settings by lazy {
         icon(
             "Settings",
-            "M9 3H15L16 6L19 7L21 10V14L19 17L16 18L15 21H9L8 18L5 17L3 14V10L5 7L8 6ZM15.5 12A3.5 3.5 0 1 1 8.5 12A3.5 3.5 0 1 1 15.5 12",
+            "M9.245 5.348L10.503 4.957L10.664 2.493L13.336 2.493L13.497 4.957L14.755 5.348L14.755 5.348L15.921 5.962L17.777 4.333L19.667 6.223L18.038 8.079L18.652 9.245L18.652 9.245L19.043 10.503L21.507 10.664L21.507 13.336L19.043 13.497L18.652 14.755L18.652 14.755L18.038 15.921L19.667 17.777L17.777 19.667L15.921 18.038L14.755 18.652L14.755 18.652L13.497 19.043L13.336 21.507L10.664 21.507L10.503 19.043L9.245 18.652L9.245 18.652L8.079 18.038L6.223 19.667L4.333 17.777L5.962 15.921L5.348 14.755L5.348 14.755L4.957 13.497L2.493 13.336L2.493 10.664L4.957 10.503L5.348 9.245L5.348 9.245L5.962 8.079L4.333 6.223L6.223 4.333L8.079 5.962L9.245 5.348ZM15.1 12A3.1 3.1 0 1 1 8.9 12A3.1 3.1 0 1 1 15.1 12Z",
         )
     }
     val Check by lazy { icon("Check", "M4 12L9 17L20 6") }

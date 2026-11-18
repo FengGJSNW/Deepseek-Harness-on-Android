@@ -82,6 +82,82 @@ test('chat-only removes all execution tools and terminal stays independently opt
     }
   }
 });
+test('terminal schema describes the selected backend and offers elevation only for restricted Sandbox', async () => {
+  for (const [level, access, elevate] of [
+    ['root', 'full', false],
+    ['root', 'ask', false],
+    ['shell', 'ask', false],
+    ['sandbox', 'ask', true],
+    ['sandbox', 'full', false],
+    ['sandbox', 'auto', false],
+  ]) {
+    let functions;
+    const instance = await load().create(
+      async (method, args) => {
+        if (method === 'complete') {
+          functions = args.tools.map((tool) => tool.function);
+          return { choices: [{ message: { content: 'ready' }, finish_reason: 'stop' }] };
+        }
+        return {};
+      },
+      () => {},
+      { access, terminalEnabled: true, terminalConfig: JSON.stringify({ level }) },
+    );
+    try {
+      await instance.send('test terminal tools');
+      const exec = functions.find((tool) => tool.name === 'terminal_exec');
+      assert.equal(exec.description.includes('/workspace'), level === 'sandbox');
+      assert.equal(
+        functions.some((tool) => tool.name === 'terminal_elevate'),
+        elevate,
+      );
+      if (level === 'root') assert.match(exec.description, /Android 原生终端/);
+    } finally {
+      await instance.dispose();
+    }
+  }
+});
+test('forced Sandbox exposes only guest execution tools and routes explicit sandbox IDs', async () => {
+  for (const sandboxOnly of [true, false]) {
+    let functions;
+    const instance = await load().create(
+      async (method, args) => {
+        if (method === 'complete') {
+          functions = args.tools.map((tool) => tool.function);
+          return { choices: [{ message: { content: 'ready' }, finish_reason: 'stop' }] };
+        }
+        return {};
+      },
+      () => {},
+      {
+        access: 'ask',
+        terminalEnabled: true,
+        phoneTools: true,
+        fileTools: true,
+        sandboxOnly,
+        memoryEnabled: false,
+        terminalConfig: JSON.stringify({ level: sandboxOnly ? 'sandbox' : 'app' }),
+      },
+    );
+    try {
+      await instance.send('Check available environment');
+      const names = functions.map((tool) => tool.name);
+      assert.ok(names.includes('sandbox_connect'));
+      assert.ok(names.includes('workspace_read'));
+      assert.ok(!names.includes('memory_read'));
+      assert.equal(names.includes('observe'), !sandboxOnly);
+      assert.equal(names.includes('mcp_call'), !sandboxOnly);
+      assert.ok(!names.includes('terminal_elevate'));
+      assert.equal(
+        functions.find((tool) => tool.name === 'terminal_exec').parameters.properties.sandbox_id
+          .type,
+        'string',
+      );
+    } finally {
+      await instance.dispose();
+    }
+  }
+});
 test('browser provider offers only the selected tools and sends official results back to the model', async () => {
   const local = ['browser_act', 'browser_open', 'browser_snapshot', 'browser_source'];
   for (const [options, expected] of [
@@ -994,5 +1070,399 @@ test('skills are discovered on demand and proxy management is opt-in', async () 
     } finally {
       await instance.dispose();
     }
+  }
+});
+
+test('DSHA work bootstrap precedes completion and usage retains provider cache measurements', async () => {
+  const events = [];
+  const calls = [];
+  const agent = await load().create(
+    async (method, args) => {
+      calls.push(method);
+      if (method === 'memory_context')
+        return {
+          global: { scope: 'global', text: 'complete-global-memory-after-summary' },
+          project: { scope: 'project', text: 'complete-project-memory-after-summary' },
+          instructions: [{ scope: 'project', text: 'project-work-instruction' }],
+          skills: [{ name: 'project-skill' }],
+          hookContext: 'hook-without-session-summary',
+        };
+      if (method === 'complete') {
+        const messages = JSON.stringify(args.messages);
+        for (const required of [
+          'Deepseek Harness on Android',
+          '全部工具',
+          'complete-global-memory-after-summary',
+          'complete-project-memory-after-summary',
+          'project-work-instruction',
+          'project-skill',
+          'hook-without-session-summary',
+        ])
+          assert.ok(messages.includes(required), required);
+        assert.ok(calls.indexOf('memory_context') < calls.indexOf('complete'));
+        return {
+          choices: [{ message: { content: 'done' }, finish_reason: 'stop' }],
+          usage: {
+            prompt_tokens: 100,
+            completion_tokens: 25,
+            total_tokens: 125,
+            prompt_cache_hit_tokens: 70,
+          },
+        };
+      }
+      return {};
+    },
+    (type, value) => events.push({ type, value }),
+    { sessionId: 'work-bootstrap', access: 'ask' },
+  );
+  try {
+    await agent.send('inspect this project');
+    const usage = events.find((e) => e.type === 'usage').value;
+    assert.equal(usage.prompt_cache_hit_tokens, 70);
+    assert.equal(usage.prompt_tokens, 100);
+    assert.equal(usage.context_budget, 1000000);
+    assert.ok(!JSON.stringify(agent.snapshot()).includes('complete-global-memory-after-summary'));
+  } finally {
+    await agent.dispose();
+  }
+});
+
+test('planning and review expose read-only project tools without mutation or delegation routes', async () => {
+  for (const workMode of ['plan', 'review', 'unknown-mode']) {
+    let names;
+    const agent = await load().create(
+      async (method, args) => {
+        if (method === 'complete') {
+          names = args.tools.map((t) => t.function.name);
+          return { choices: [{ message: { content: '只读检查完成' }, finish_reason: 'stop' }] };
+        }
+        return {};
+      },
+      () => {},
+      {
+        workMode,
+        access: 'full',
+        effort: 'ultra',
+        terminalEnabled: true,
+        fileTools: true,
+        phoneTools: true,
+        browserProvider: 'both',
+        creatorMode: true,
+        delegate: async () => ({}),
+      },
+    );
+    try {
+      await agent.send('inspect');
+      for (const name of [
+        'workspace_context',
+        'workspace_search',
+        'workspace_read',
+        'work_plan',
+        'work_status',
+        'worktree_review',
+      ])
+        assert.ok(names.includes(name), `${workMode}: ${name}`);
+      for (const name of [
+        'terminal_exec',
+        'verification_run',
+        'workspace_write',
+        'workspace_edit',
+        'memory_write',
+        'mcp_call',
+        'plugin_call',
+        'plugin_manager',
+        'spawn_agent',
+        'worktree_merge',
+        'worktree_discard',
+        'tap',
+        'browser_act',
+        'browser_open',
+      ])
+        assert.ok(!names.includes(name), `${workMode}: blocked ${name}`);
+    } finally {
+      await agent.dispose();
+    }
+  }
+});
+
+test('workflow bootstrap loads project rules before first completion and refreshes plan state', async () => {
+  const calls = [];
+  let revision = 1;
+  let completions = 0;
+  let staticPrefix;
+  const agent = await load().create(
+    async (method, args) => {
+      calls.push(method);
+      if (method === 'work_status') return { plan: { revision, goal: 'current-plan' } };
+      if (method === 'workspace_context')
+        return { rules: [{ path: 'AGENTS.md', text: 'root-project-rules' }] };
+      if (method === 'complete') {
+        completions++;
+        const first = JSON.stringify(args.messages[0]);
+        if (staticPrefix) assert.equal(first, staticPrefix);
+        staticPrefix = first;
+        assert.ok(!first.includes('root-project-rules') && !first.includes('current-plan'));
+        assert.equal(args.messages[0].role, 'system');
+        const messages = JSON.stringify(args.messages);
+        assert.ok(messages.includes('root-project-rules'));
+        assert.ok(messages.includes(`\\"revision\\":${revision}`));
+        return { choices: [{ message: { content: 'ready' }, finish_reason: 'stop' }] };
+      }
+      return {};
+    },
+    () => {},
+    {
+      workMode: 'execute',
+      sessionId: 'workflow',
+      access: 'ask',
+      fileTools: true,
+      workspace: 'test-workspace',
+    },
+  );
+  try {
+    await agent.send('first');
+    revision = 2;
+    await agent.send('continue');
+    assert.equal(completions, 2);
+    assert.equal(calls.filter((m) => m === 'workspace_context').length, 1);
+    assert.equal(calls.filter((m) => m === 'work_status').length, 2);
+    assert.ok(calls.indexOf('workspace_context') < calls.indexOf('complete'));
+    assert.ok(!JSON.stringify(agent.snapshot()).includes('root-project-rules'));
+  } finally {
+    await agent.dispose();
+  }
+});
+
+test('execution workflow respects disabled tools and Sandbox catalog boundaries', async () => {
+  for (const sandboxOnly of [false, true]) {
+    let names;
+    let schemas;
+    const agent = await load().create(
+      async (method, args) => {
+        if (method === 'complete') {
+          names = args.tools.map((t) => t.function.name);
+          schemas = args.tools;
+          return { choices: [{ message: { content: 'done' }, finish_reason: 'stop' }] };
+        }
+        return {};
+      },
+      () => {},
+      {
+        workMode: 'execute',
+        access: 'full',
+        terminalEnabled: true,
+        fileTools: true,
+        phoneTools: false,
+        sandboxOnly,
+      },
+    );
+    try {
+      await agent.send('test');
+      for (const name of ['work_status', 'work_plan', 'workspace_edit', 'verification_run'])
+        assert.ok(names.includes(name));
+      const verify = schemas.find((t) => t.function.name === 'verification_run').function
+        .parameters;
+      assert.ok(verify.properties.timeout_seconds && verify.properties.sandbox_id);
+      const read = schemas.find((t) => t.function.name === 'workspace_read').function.parameters;
+      assert.ok(read.properties.start_line && read.properties.line_count);
+      if (sandboxOnly)
+        for (const name of ['memory_write', 'plugin_call', 'mcp_call', 'tap'])
+          assert.ok(!names.includes(name));
+    } finally {
+      await agent.dispose();
+    }
+  }
+});
+
+test('a read-only team rejects direct delegation even if a caller bypasses the advertised catalog', async () => {
+  let delegate;
+  const create = async (_rpc, _notify, config) => {
+    delegate = config.delegate;
+    return { send: async () => {}, dispose: async () => {}, cancelFromNative() {} };
+  };
+  const team = await load().createTeam(
+    create,
+    async () => ({}),
+    () => {},
+    { workMode: 'plan', effort: 'ultra', access: 'full' },
+  );
+  try {
+    await assert.rejects(
+      delegate('spawn_agent', { name: 'child', task: 'edit' }, new AbortController().signal),
+    );
+  } finally {
+    await team.dispose();
+  }
+});
+
+test('image-only turns retain both images without fabricating user text, including restored history', async () => {
+  const harness = load();
+  const requests = [];
+  const rpc = async (method, args) => {
+    if (method === 'image') return 'aW1hZ2U=';
+    if (method === 'complete') {
+      requests.push(args);
+      return { choices: [{ message: { content: '看到了两张图片' }, finish_reason: 'stop' }] };
+    }
+    return {};
+  };
+  const config = {
+    sessionId: 'image-only',
+    model: 'deepseek-flash',
+    access: 'none',
+    phoneTools: false,
+  };
+  const agent = await harness.create(rpc, () => {}, config);
+  let seed;
+  try {
+    await agent.send('', [
+      { attachmentId: 'first-photo', mediaType: 'image/jpeg' },
+      { attachmentId: 'second-photo', mediaType: 'image/png' },
+    ]);
+    const imageMessage = requests[0].messages.find(
+      (message) =>
+        message.role === 'user' &&
+        Array.isArray(message.content) &&
+        message.content.some((part) => part.type === 'image_url'),
+    );
+    assert.equal(imageMessage.content.length, 2);
+    assert.ok(imageMessage.content.every((part) => part.type === 'image_url'));
+    assert.ok(
+      JSON.stringify(requests[0].messages.filter((message) => message.role === 'system')).includes(
+        '默认识图在后台完成',
+      ),
+    );
+    seed = JSON.parse(JSON.stringify(agent.snapshot()));
+    assert.ok(!JSON.stringify(seed).includes('请描述这些图片'));
+    const userEvents = seed.filter((event) => event.type === 'user/message');
+    assert.equal(userEvents.length, 1);
+    assert.ok(!JSON.stringify(userEvents).includes('默认识图在后台完成'));
+  } finally {
+    await agent.dispose();
+  }
+  const restored = await harness.create(rpc, () => {}, { ...config, seed });
+  try {
+    await restored.send('比较两张图片');
+    const images = requests
+      .at(-1)
+      .messages.flatMap((message) => (Array.isArray(message.content) ? message.content : []))
+      .filter((part) => part.type === 'image_url');
+    assert.equal(images.length, 2);
+    assert.ok(JSON.stringify(requests.at(-1).messages).includes('比较两张图片'));
+  } finally {
+    await restored.dispose();
+  }
+});
+
+test('background image recognition persists separate image text and reuses cached results', async () => {
+  const harness = load();
+  const stored = new Map();
+  const events = [];
+  let recognitions = 0;
+  const rpc = async (method, args) => {
+    if (method === 'image') return 'aW1hZ2U=';
+    if (method === 'image_recognition') {
+      if (args.action === 'pending')
+        return {
+          pending: args.ids
+            .filter((id) => !stored.has(id))
+            .map((id) => ({ id, sha256: 'a'.repeat(64) })),
+        };
+      for (const entry of args.entries) stored.set(entry.id, entry.text);
+      return { saved: args.entries.length };
+    }
+    if (method === 'complete' && args.response_format?.type === 'json_object') {
+      recognitions++;
+      return {
+        usage: { total_tokens: 40 },
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                images: [
+                  { id: 'photo-a', description: '蓝色公交站牌', text: '人民路 48 路' },
+                  { id: 'photo-b', description: '绿色出口指示牌', text: '停车场出口 C7' },
+                  { id: 'foreign-photo', description: '不可保存到其他图片', text: 'wrong' },
+                ],
+              }),
+            },
+          },
+        ],
+      };
+    }
+    if (method === 'complete')
+      return { choices: [{ message: { content: '收到图片' }, finish_reason: 'stop' }] };
+    return {};
+  };
+  const agent = await harness.create(rpc, (type, value) => events.push({ type, value }), {
+    id: 'image-index-task',
+    sessionId: 'indexed-images',
+    access: 'none',
+    phoneTools: false,
+  });
+  try {
+    const images = ['photo-a', 'photo-b'].map((attachmentId) => ({
+      attachmentId,
+      mediaType: 'image/jpeg',
+    }));
+    await agent.send('', images);
+    assert.match(stored.get('photo-a'), /人民路 48 路/);
+    assert.match(stored.get('photo-b'), /停车场出口 C7/);
+    assert.equal(stored.size, 2);
+    assert.equal(events.filter((event) => event.type === 'image_index_usage').length, 1);
+    assert.ok(!JSON.stringify(agent.snapshot()).includes('停车场出口 C7'));
+    await agent.send('继续', images);
+    assert.equal(recognitions, 1);
+  } finally {
+    await agent.dispose();
+  }
+});
+
+test('stopping cancels background image recognition and never saves a cancelled result', async () => {
+  const harness = load();
+  let started;
+  const ready = new Promise((resolve) => {
+    started = resolve;
+  });
+  let saves = 0;
+  let aborted = false;
+  const rpc = async (method, args, signal) => {
+    if (method === 'image') return 'aW1hZ2U=';
+    if (method === 'image_recognition') {
+      if (args.action === 'pending') return { pending: [{ id: 'photo', sha256: 'b'.repeat(64) }] };
+      saves++;
+      return {};
+    }
+    if (method === 'complete' && args.response_format?.type === 'json_object') {
+      started();
+      return new Promise((_, reject) =>
+        signal.addEventListener(
+          'abort',
+          () => {
+            aborted = true;
+            reject(Error('cancelled'));
+          },
+          { once: true },
+        ),
+      );
+    }
+    if (method === 'complete')
+      return { choices: [{ message: { content: '收到' }, finish_reason: 'stop' }] };
+    return {};
+  };
+  const agent = await harness.create(rpc, () => {}, {
+    id: 'cancel-index',
+    sessionId: 'cancel-index',
+    access: 'none',
+  });
+  try {
+    const run = agent.send('', [{ attachmentId: 'photo', mediaType: 'image/jpeg' }]);
+    await ready;
+    agent.cancelFromNative();
+    await run;
+    assert.equal(aborted, true);
+    assert.equal(saves, 0);
+  } finally {
+    await agent.dispose();
   }
 });

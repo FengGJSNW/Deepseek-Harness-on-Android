@@ -28,8 +28,7 @@ internal class PhoneReviewOverlay(
             dismiss()
             return
         }
-        val memory = AssistantState.pendingMemory?.taskId == task.id
-        val title = task.reviewTitle(memory)
+        val title = task.reviewTitle()
         val key = Triple(task.id, title, task.question)
         if (key == shown) {
             view?.visibility = if (hidden) View.INVISIBLE else View.VISIBLE
@@ -83,7 +82,7 @@ internal class PhoneReviewOverlay(
             }
         buttons.addView(allow)
         allow.visibility = View.GONE
-        val direct = task.approval && !task.terminalApproval && !memory
+        val direct = task.approval && !task.terminalApproval
         val summary = paper.getChildAt(1) as TextView
         if (direct)
             summary.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->

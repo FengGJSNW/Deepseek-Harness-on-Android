@@ -2,7 +2,6 @@ import java.util.Properties
 
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
 }
 
 val signingProperties = Properties()
@@ -24,7 +23,6 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions { jvmTarget = "17" }
     signingConfigs {
         val localDebugKey = rootProject.file(".android/debug.keystore")
         if (localDebugKey.isFile) getByName("debug") { storeFile = localDebugKey }
@@ -39,3 +37,5 @@ android {
         buildTypes.getByName("release") { signingConfig = signingConfigs.getByName("localRelease") }
     }
 }
+
+kotlin { compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17) } }

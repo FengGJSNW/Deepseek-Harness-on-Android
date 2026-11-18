@@ -24,7 +24,8 @@ internal data class OfficialSnapshot(
 
 /** Only allow same-origin session paths. No tokens, storage, cookies or network interception. */
 internal object OfficialChatDom {
-    fun sessionPath(value: String): Boolean = value.matches(Regex("/a/chat/s/[a-zA-Z0-9-]{8,80}"))
+    fun sessionPath(value: String): Boolean =
+        value.matches(Regex("/a/[a-zA-Z0-9_-]{1,64}/s/[a-zA-Z0-9_-]{8,128}"))
 
     fun parse(v: JSONObject): OfficialSnapshot {
         val sessions = v.optJSONArray("sessions")
@@ -78,13 +79,13 @@ internal object OfficialChatDom {
           }
           if (!window.__dshaOfficialDirty && window.__dshaOfficialUrl === location.href) return null;
           window.__dshaOfficialDirty = false; window.__dshaOfficialUrl = location.href;
-          const input = document.querySelector('textarea:not([name*=captcha])');
+          ${OfficialChatSelectors.script}
+          const input = dsha.input;
           if (input && !window.__dshaOfficialVisible && !window.__dshaOfficialWide && document.querySelector('meta[name=viewport]')) {
             document.querySelector('meta[name=viewport]').content='width=1100,initial-scale=1';
             window.__dshaOfficialWide=true;
           }
-          const sessions = [...document.querySelectorAll('a[href^="/a/chat/s/"]')].slice(0,300)
-            .map(e => ({path:e.getAttribute('href'),title:(e.innerText||e.textContent||'对话').trim().slice(0,100)}));
+          const sessions = dsha.sessions;
           const nodes = [...document.querySelectorAll('.ds-message')].slice(-100);
           let unknown = false;
           const reasoningSelector = '.ds-think-content,.ds-think__content,.ds-reasoning-content,[data-testid="reasoning-content"],[data-message-role="reasoning"]';
@@ -146,16 +147,12 @@ internal object OfficialChatDom {
             if (user) {const body=e.querySelector('.eafda4ae,.fbb737a4')||e;return {role:'user',text:body.innerText.trim().slice(0,60000)};}
             unknown = true; return {role:'system',text:text(e)};
           }).filter(Boolean);
-          const primary = input?.parentElement?.parentElement?.querySelector('.ds-button--primary[role=button]');
-          const host=input?.parentElement?.parentElement;
-          const toggle=names=>[...(host?.querySelectorAll('.ds-toggle-button,[aria-pressed]')||[])].find(e=>names.some(n=>(e.textContent||'').trim().toLowerCase()===n));
-          const thinking=toggle(['深度思考','deepthink','deepthink (r1)']);
-          const search=toggle(['智能搜索','联网搜索','search']);
-          const selected=e=>e?.getAttribute('aria-pressed')==='true'||!!e?.classList.contains('ds-toggle-button--selected');
-          // Busy button switches to a square path; do not infer state from user's draft text.
-          const arrow = primary?.querySelector('svg path')?.getAttribute('d')?.startsWith('M8.3125');
+          const primary=dsha.primary, host=dsha.host;
+          const thinking=dsha.toggle(['深度思考','deepthink','deepthink (r1)']);
+          const search=dsha.toggle(['智能搜索','联网搜索','网络搜索','search']);
+          const selected=dsha.selected;
           return {url:location.href,title:document.title.replace(/ - DeepSeek$/,''),authenticated:!!primary && !/^\/(sign_|auth|login)/.test(location.pathname),
-            sessions,messages,unsupported:!input||!primary,partialHistory:unknown,generating:!!primary && !arrow,
+            sessions,messages,unsupported:!input||!primary,partialHistory:unknown,generating:!!primary && dsha.stop(primary),
             deepThinking:selected(thinking),search:selected(search),thinkingAvailable:!!thinking,searchAvailable:!!search,
             attachmentsAvailable:!!host?.querySelector('input[type=file]')};
         })()
@@ -165,16 +162,17 @@ internal object OfficialChatDom {
     fun sendScript(text: String) =
         """
         (() => {
-          const input = document.querySelector('textarea:not([name*=captcha])');
+          ${OfficialChatSelectors.script}
+          const input = dsha.input;
           if (!input || location.origin !== 'https://chat.deepseek.com') return {error:'请先登录官方聊天'};
-          const button = input.parentElement.parentElement.querySelector('.ds-button--primary[role=button]');
+          const button = dsha.primary;
           if (!button) return {error:'未找到官方发送按钮，请重试连接'};
           const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set;
           set.call(input,${JSONObject.quote(text)});
           input.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:${JSONObject.quote(text)}}));
           input.dispatchEvent(new Event('change',{bubbles:true}));
           window.__dshaOfficialDirty = true;
-          return {prepared:true,url:location.href,users:document.querySelectorAll('.ds-message.d29f3d7d,[data-message-role="user"]').length};
+          return {prepared:true,url:location.href,users:dsha.users().length};
         })()
     """
             .trimIndent()
@@ -182,9 +180,11 @@ internal object OfficialChatDom {
     val readyToSendScript =
         """
         (() => {
-          const input = document.querySelector('textarea:not([name*=captcha])');
-          const button = input?.parentElement?.parentElement?.querySelector('.ds-button--primary[role=button]');
-          if (!button || !button.querySelector('svg path')?.getAttribute('d')?.startsWith('M8.3125') || button.classList.contains('ds-button--disabled') || button.getAttribute('aria-disabled')==='true')
+          ${OfficialChatSelectors.script}
+          const input = dsha.input;
+          if (location.origin !== 'https://chat.deepseek.com') return {error:'官方连接无效'};
+          const button = dsha.primary;
+          if (!dsha.enabled(button) || !dsha.send(button))
             return {error:'官方正在处理，请稍后重试'};
           return {ready:true};
         })()
@@ -193,9 +193,11 @@ internal object OfficialChatDom {
     val clickSendScript =
         """
         (() => {
-          const input = document.querySelector('textarea:not([name*=captcha])');
-          const button = input?.parentElement?.parentElement?.querySelector('.ds-button--primary[role=button]');
-          if (!button || !button.querySelector('svg path')?.getAttribute('d')?.startsWith('M8.3125') || button.classList.contains('ds-button--disabled') || button.getAttribute('aria-disabled')==='true')
+          ${OfficialChatSelectors.script}
+          const input = dsha.input;
+          if (location.origin !== 'https://chat.deepseek.com') return {error:'官方连接无效'};
+          const button = dsha.primary;
+          if (!dsha.enabled(button) || !dsha.send(button))
             return {error:'官方正在处理，请稍后重试'};
           button.click(); return {sent:true};
         })()
@@ -206,12 +208,12 @@ internal object OfficialChatDom {
         require(mode in listOf("thinking", "search"))
         val names =
             if (mode == "thinking") "['深度思考','deepthink','deepthink (r1)']"
-            else "['智能搜索','联网搜索','search']"
+            else "['智能搜索','联网搜索','网络搜索','search']"
         return """(() => {
             if(location.origin!=='https://chat.deepseek.com')return {error:'官方连接无效'};
-            const host=document.querySelector('textarea:not([name*=captcha])')?.parentElement?.parentElement;
-            const button=[...(host?.querySelectorAll('.ds-toggle-button,[aria-pressed]')||[])].find(e=>$names.includes((e.textContent||'').trim().toLowerCase()));
-            if(!button||button.getAttribute('aria-disabled')==='true'||button.classList.contains('ds-toggle-button--disabled'))return {error:'官方模式暂不可用'};
+            ${OfficialChatSelectors.script}
+            const button=dsha.toggle($names);
+            if(!dsha.enabled(button))return {error:'官方模式暂不可用'};
             button.click();window.__dshaOfficialDirty=true;return {changed:true};
         })()"""
             .trimIndent()
@@ -220,7 +222,8 @@ internal object OfficialChatDom {
     fun acknowledgementScript(text: String, before: Int, previousUrl: String) =
         """(() => {
         if(location.origin!=='https://chat.deepseek.com')return {accepted:false};
-        const users=[...document.querySelectorAll('.ds-message.d29f3d7d,[data-message-role="user"]')];
+        ${OfficialChatSelectors.script}
+        const users=dsha.users();
         const last=users.at(-1)?.innerText?.trim()||'';
         return {accepted:users.length>$before || (location.href!==${JSONObject.quote(previousUrl)}&&!!last&&last.includes(${JSONObject.quote(text.trim().take(120))}))};
     })()"""
@@ -229,7 +232,9 @@ internal object OfficialChatDom {
     val beginAttachmentsScript =
         """
         (() => {
-                if(location.origin!=='https://chat.deepseek.com'||!document.querySelector('textarea')?.parentElement?.parentElement?.querySelector('input[type=file]'))return {error:'官方附件入口暂不可用'};
+                if(location.origin!=='https://chat.deepseek.com')return {error:'官方连接无效'};
+                ${OfficialChatSelectors.script}
+                if(!dsha.host?.querySelector('input[type=file]'))return {error:'官方附件入口暂不可用'};
                 window.__dshaOfficialUpload={files:[],parts:[]};return {ready:true};
             })()
         """
@@ -252,7 +257,9 @@ internal object OfficialChatDom {
     val commitAttachmentsScript =
         """
         (() => {
-                const input=document.querySelector('textarea')?.parentElement?.parentElement?.querySelector('input[type=file]'),upload=window.__dshaOfficialUpload;
+                if(location.origin!=='https://chat.deepseek.com')return {error:'官方连接无效'};
+                ${OfficialChatSelectors.script}
+                const input=dsha.host?.querySelector('input[type=file]'),upload=window.__dshaOfficialUpload;
                 if(!input||!upload)return {error:'官方附件入口暂不可用'};
                 const transfer=new DataTransfer();upload.files.forEach(file=>transfer.items.add(file));input.files=transfer.files;
                 input.dispatchEvent(new Event('change',{bubbles:true}));delete window.__dshaOfficialUpload;window.__dshaOfficialDirty=true;return {ready:true};

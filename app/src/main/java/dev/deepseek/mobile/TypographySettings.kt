@@ -23,8 +23,12 @@ internal fun TypographySettings() {
     var installed by remember { mutableStateOf(emptyList<InstalledFont>()) }
     var shown by remember { mutableIntStateOf(30) }
     LaunchedEffect(otherExpanded) { if (otherExpanded) installed = SystemFontCatalog.load() }
-    Text("字体", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-    Text("界面、阅读和代码分别使用合适的字族，中文与表情自动回退。", color = WhaleMuted, fontSize = 12.sp)
+    SectionLabel("字体选择")
+    Text(
+        "下列字族用于聊天正文和输入区；导航与设置使用 FlClash 同款 Android 排版，代码保留等宽字体。",
+        color = WhaleMuted,
+        fontSize = 12.sp,
+    )
     FontPreset.entries
         .filter { it != FontPreset.OTHER }
         .forEach { preset ->
@@ -50,7 +54,7 @@ internal fun TypographySettings() {
                 }
             }
         }
-    TextButton(onClick = { otherExpanded = !otherExpanded }) {
+    DshaButton(style = DshaButtonStyle.Plain, onClick = { otherExpanded = !otherExpanded }) {
         Text(if (otherExpanded) "收起其他字体" else "其他字体…")
     }
     DisclosureBody(otherExpanded) {
@@ -66,7 +70,8 @@ internal fun TypographySettings() {
             DshaFonts.systemFamilies
                 .filter { it.contains(query, true) }
                 .forEach { family ->
-                    TextButton(
+                    DshaButton(
+                        style = DshaButtonStyle.Plain,
                         onClick = {
                             FontSettings.preset = FontPreset.OTHER
                             FontSettings.otherFamily = family
@@ -94,7 +99,8 @@ internal fun TypographySettings() {
                 .filter { it.title.contains(query, true) }
                 .take(shown)
                 .forEach { face ->
-                    TextButton(
+                    DshaButton(
+                        style = DshaButtonStyle.Plain,
                         onClick = {
                             FontSettings.preset = FontPreset.OTHER
                             FontSettings.otherFamily = face.id
@@ -110,11 +116,14 @@ internal fun TypographySettings() {
                     }
                 }
             if (installed.count { it.title.contains(query, true) } > shown)
-                TextButton(onClick = { shown += 30 }) { Text("显示更多") }
+                DshaButton(style = DshaButtonStyle.Plain, onClick = { shown += 30 }) {
+                    Text("显示更多")
+                }
             Text("可用字形取决于系统；未公开的字体特性不提供模拟开关。", fontSize = 11.sp, color = WhaleMuted)
         }
     }
     HorizontalDivider(color = WhaleLine)
+    SectionLabel("属性")
     Text("全局大小 · ${"%.0f".format(FontSettings.scale * 100)}%", fontSize = 13.sp)
     CleanSlider(
         FontSettings.scale,
@@ -128,7 +137,7 @@ internal fun TypographySettings() {
         ExperienceSettings.lineSpacing,
         { ExperienceSettings.lineSpacing = it },
         modifier = Modifier.testTag("typography-spacing-slider"),
-        valueRange = 1.3f..2f,
+        valueRange = 1.2f..1.9f,
         onValueChangeFinished = { ExperienceSettings.save() },
     )
     if (FontSettings.knownFeatures) {
@@ -149,23 +158,13 @@ internal fun TypographySettings() {
             FontSettings.changed()
         }
     }
-    Text("实时预览", fontSize = 11.sp, color = WhaleMuted)
-    Surface(
-        Modifier.fillMaxWidth().heightIn(min = 180.dp, max = 300.dp).testTag("typography-preview"),
-        color = Color(0xFFFAF9F6),
-        shape = ContinuousShape(16.dp),
-    ) {
-        Box(Modifier.verticalScroll(rememberScrollState()).padding(16.dp)) {
-            MarkdownText(
-                "### 让想法慢慢成形\n\n清晰的 **中文阅读**，搭配 *a little italic*。界面、正文与代码拥有各自的节奏。\n\n> 认真阅读，也轻松创造。\n\n```kotlin\nval answer = if (a != b) 42 else 0\nval result = { x: Int -> x * 2 }\n```\n\n- [x] 中文与 Emoji 字形回退",
-            )
-        }
-    }
     if (DshaFonts.error.isNotBlank())
         Text(DshaFonts.error, color = Color(0xFFAF503E), fontSize = 12.sp)
     Row {
-        TextButton(onClick = { FontSettings.reset() }) { Text("恢复默认") }
-        TextButton(onClick = { licenses = true }) { Text("字体许可") }
+        DshaButton(style = DshaButtonStyle.Plain, onClick = { FontSettings.reset() }) {
+            Text("恢复默认")
+        }
+        DshaButton(style = DshaButtonStyle.Plain, onClick = { licenses = true }) { Text("字体许可") }
     }
     if (licenses) {
         val context = LocalContext.current
@@ -198,7 +197,27 @@ internal fun TypographySettings() {
                     fontSize = 11.sp,
                 )
             },
-            confirmButton = { TextButton(onClick = { licenses = false }) { Text("完成") } },
+            confirmButton = {
+                DshaButton(style = DshaButtonStyle.Plain, onClick = { licenses = false }) {
+                    Text("完成")
+                }
+            },
         )
+    }
+}
+
+@Composable
+internal fun TypographyPreview() {
+    Text("实时预览", fontSize = 11.sp, color = WhaleMuted)
+    Surface(
+        Modifier.fillMaxWidth().heightIn(min = 136.dp, max = 176.dp).testTag("typography-preview"),
+        color = Color(0xFFFAF9F6),
+        shape = ContinuousShape(16.dp),
+    ) {
+        Box(Modifier.verticalScroll(rememberScrollState()).padding(16.dp)) {
+            MarkdownText(
+                "### 让想法慢慢成形\n\n清晰的 **中文阅读**，搭配 *a little italic*。界面、正文与代码拥有各自的节奏。\n\n> 认真阅读，也轻松创造。\n\n```kotlin\nval answer = if (a != b) 42 else 0\nval result = { x: Int -> x * 2 }\n```\n\n- [x] 中文与 Emoji 字形回退",
+            )
+        }
     }
 }

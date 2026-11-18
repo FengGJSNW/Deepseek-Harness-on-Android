@@ -18,16 +18,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 
-/** Edge-to-edge conversation, with genuine backdrop blur behind the floating chrome. */
+/** Edge-to-edge conversation with a shared display list for floating glass surfaces. */
 @Composable
-internal fun ColumnScope.ConversationScreen(cardAside: State<Boolean>) {
+internal fun ColumnScope.ConversationScreen(cardAside: State<Boolean>, backdrop: ChatBackdrop) {
     val state = AssistantState
     val c = state.current
     val list = androidx.compose.foundation.lazy.rememberLazyListState()
     val keyboard = LocalSoftwareKeyboardController.current
     val context = LocalContext.current
-    val layer = rememberGraphicsLayer()
-    val backdrop = remember(layer) { ChatBackdrop(layer) }
     val messages = c.messages.toList()
     val hasMessages = messages.isNotEmpty()
     val groups = remember(messages) { conversationGroups(messages) }
@@ -61,7 +59,7 @@ internal fun ColumnScope.ConversationScreen(cardAside: State<Boolean>) {
         composer = {
             Column {
                 if (question != null) QuestionCard(question)
-                Composer(c, if (hasMessages) backdrop else null) {
+                Composer(c) {
                     when (AgentService.current?.send(c.draft.trim())) {
                         AgentService.SendResult.MISSING_KEY ->
                             android.widget.Toast.makeText(
@@ -101,14 +99,13 @@ internal fun ColumnScope.ConversationScreen(cardAside: State<Boolean>) {
                     )
                     .clipToBounds(),
             ) {
-                HeaderBackdrop(if (hasMessages) backdrop else null, Modifier.matchParentSize())
+                HeaderBackdrop(Modifier.matchParentSize())
             }
         },
     ) {
         Box(Modifier.fillMaxSize()) {
             Box(
-                Modifier.fillMaxSize()
-                    .then(if (hasMessages) Modifier.chatBackdrop(backdrop) else Modifier),
+                Modifier.fillMaxSize().chatBackdrop(backdrop),
             ) {
                 if (c.messages.isEmpty())
                     Text(

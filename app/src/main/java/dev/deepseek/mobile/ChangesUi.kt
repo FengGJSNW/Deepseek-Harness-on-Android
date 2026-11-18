@@ -53,7 +53,7 @@ internal fun ChangesPanel() {
         WhaleSheet(change.path, change.kind, { ChangeState.selected = null }) {
             Row {
                 listOf("diff" to "差异", "before" to "修改前", "after" to "修改后").forEach { (id, title) ->
-                    TextButton(onClick = { mode = id }) {
+                    DshaTextButton(onClick = { mode = id }) {
                         if (id == mode)
                             Icon(AppIcons.Check, null, Modifier.padding(end = 4.dp).size(13.dp))
                         Text(title, fontSize = 12.sp)

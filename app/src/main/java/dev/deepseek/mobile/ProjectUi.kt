@@ -23,7 +23,7 @@ internal fun ProjectNameDialog(
             shape = ContinuousShape(14.dp),
             visualTransformation = UprightSymbols.transformation,
         )
-        Button(
+        DshaButton(
             onClick = {
                 runCatching {
                     if (project == null) created(AssistantState.addProject(title))
@@ -45,18 +45,55 @@ internal fun ProjectNameDialog(
 }
 
 @Composable
-internal fun ProjectActions(project: WorkProject, close: () -> Unit, openConversation: () -> Unit) {
-    var page by remember { mutableStateOf("menu") }
+internal fun ProjectActions(
+    project: WorkProject,
+    expanded: Boolean,
+    close: () -> Unit,
+    openConversation: () -> Unit,
+    anchor: @Composable () -> Unit,
+) {
+    var page by remember(project.id) { mutableStateOf("") }
+    val finish = {
+        page = ""
+        close()
+    }
+    LiquidMenuAnchor(
+        expanded && page.isEmpty(),
+        close,
+        placement = MenuPlacement.SelectedRow,
+        toggleAnchor = true,
+        tag = "project-actions-${project.id}",
+        menuTitle = project.title,
+        anchor = anchor,
+    ) {
+        val pick = LocalAfterMenuReturn.current
+        GlassMenuRow(AppIcons.Chat, "新建会话") {
+            pick {
+                AgentService.current?.newSession(project.id)
+                openConversation()
+            }
+        }
+        GlassMenuRow(AppIcons.Description, "项目共享记忆") {
+            pick { page = "memory" }
+        }
+        GlassMenuRow(AppIcons.Edit, "项目名称") {
+            pick { page = "rename" }
+        }
+        GlassMenuDivider()
+        GlassMenuRow(AppIcons.Close, "删除项目", tint = DshaSurface.danger) {
+            pick { page = "delete" }
+        }
+    }
     when (page) {
-        "rename" -> ProjectNameDialog(project, close)
-        "memory" -> MemoryEditor("project", project.id, close)
+        "rename" -> ProjectNameDialog(project, finish)
+        "memory" -> MemoryEditor("project", project.id, finish)
         "delete" ->
-            WhaleSheet("删除项目？", "会话将移至最近列表，项目记忆保留在本机归档中。", close) {
-                Button(
+            WhaleSheet("删除项目？", "会话将移至最近列表，项目记忆保留在本机归档中。", finish) {
+                DshaButton(
                     onClick = {
                         runCatching {
                             AssistantState.removeProject(project.id)
-                            close()
+                            finish()
                         }
                             .onFailure { AssistantState.error = it.message.orEmpty() }
                     },
@@ -64,35 +101,5 @@ internal fun ProjectActions(project: WorkProject, close: () -> Unit, openConvers
                     Text("删除项目")
                 }
             }
-        else ->
-            WhaleSheet(project.title, close = close) {
-                OptionRow(AppIcons.Chat, "新建会话", "", false) {
-                    AgentService.current?.newSession(project.id)
-                    close()
-                    openConversation()
-                }
-                OptionRow(AppIcons.Description, "项目共享记忆", "workplace_memory.md", false) {
-                    page = "memory"
-                }
-                OptionRow(AppIcons.Edit, "项目名称", "", false) { page = "rename" }
-                OptionRow(AppIcons.Close, "删除项目", "", false) { page = "delete" }
-            }
-    }
-}
-
-@Composable
-internal fun MoveConversationDialog(c: Conversation, close: () -> Unit) {
-    WhaleSheet("移动会话", close = close) {
-        fun move(id: String) {
-            runCatching {
-                AssistantState.moveSession(c.id, id)
-                close()
-            }
-                .onFailure { AssistantState.error = it.message.orEmpty() }
-        }
-        OptionRow(AppIcons.Chat, "独立会话", "不属于任何项目", c.projectId.isEmpty()) { move("") }
-        AssistantState.projects.forEach { p ->
-            OptionRow(AppIcons.FolderOpen, p.title, "", c.projectId == p.id) { move(p.id) }
-        }
     }
 }

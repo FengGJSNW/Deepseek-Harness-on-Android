@@ -16,7 +16,11 @@ class TerminalCoreTest : TestCase() {
     private val virtual
         get() = "/dev.deepseek.mobile/workplace/session_$sid"
 
-    private fun task(mode: String, rules: String = TerminalPolicy.defaults()) =
+    private fun task(
+        mode: String,
+        rules: String = TerminalPolicy.defaults(),
+        level: String = "isolated",
+    ) =
         PhoneTask(
             sessionId = sid,
             text = "测试当前会话文件",
@@ -29,7 +33,7 @@ class TerminalCoreTest : TestCase() {
             workspace = "",
             terminalEnabled = true,
             terminalConfig =
-                TerminalSnapshot("isolated", rules, ReviewerConfig.defaultText).json().toString(),
+                TerminalSnapshot(level, rules, ReviewerConfig.defaultText).json().toString(),
         )
 
     fun testParserPreservesLiteralArgumentsAndRejectsHiddenExecution() {
@@ -173,6 +177,7 @@ class TerminalCoreTest : TestCase() {
         var reviews = 0
         var approvals = 0
         var verdict = RuleDecision.ALLOW
+        var answer = "deny"
         val manager =
             TerminalManager(
                 context,
@@ -182,7 +187,7 @@ class TerminalCoreTest : TestCase() {
                 },
                 { _, _, _ ->
                     approvals++
-                    "deny"
+                    answer
                 },
             )
         try {
@@ -205,6 +210,33 @@ class TerminalCoreTest : TestCase() {
             val ask = manager.execute(task("ask"), JSONObject().put("command", "rm note"))
             assertEquals("denied", ask.getString("status"))
             assertEquals(1, approvals)
+            answer = "once"
+            verdict = RuleDecision.SENSITIVE
+            val approved = manager.execute(task("ask"), JSONObject().put("command", "pwd"))
+            assertEquals(0, approved.getInt("exitCode"))
+            assertEquals("用户已批准本次命令", approved.getString("reason"))
+        } finally {
+            manager.close()
+        }
+    }
+
+    fun testFullAccessUsesNativeShellWithoutStaticOrSemanticReview() = runBlocking {
+        val manager =
+            TerminalManager(
+                context,
+                { _, _, _ -> error("Full access must not call the reviewer") },
+                { _, _, _ -> error("Full access must not request approval") },
+            )
+        try {
+            val command =
+                JSONObject().put("command", "{ printf 'one\\ntwo\\n'; } 2>&1 | grep -c -E '^t'")
+            val full = manager.execute(task("full", level = "app"), command)
+            assertEquals(full.toString(), 0, full.getInt("exitCode"))
+            assertEquals("1", full.getString("stdout").trim())
+            assertEquals(context.applicationInfo.uid, full.getInt("verifiedUid"))
+            val restricted = manager.execute(task("ask", level = "app"), command)
+            assertEquals("denied", restricted.getString("status"))
+            assertFalse(restricted.optBoolean("executionStarted"))
         } finally {
             manager.close()
         }

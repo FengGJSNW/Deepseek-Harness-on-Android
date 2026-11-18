@@ -2,7 +2,9 @@ package dev.deepseek.mobile
 
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -23,9 +25,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 @Composable
-internal fun MarkdownText(raw: String, modifier: Modifier = Modifier) {
-    if (MathDocument.containsMath(raw)) {
-        MathMessage(raw, modifier)
+internal fun MarkdownText(raw: String, modifier: Modifier = Modifier, scrollable: Boolean = false) {
+    val body = if (scrollable) modifier.heightIn(max = 380.dp) else modifier
+    if (!raw.contains("<details", ignoreCase = true) && MathDocument.containsMath(raw)) {
+        MathMessage(raw, body)
         return
     }
     val quick =
@@ -36,8 +39,18 @@ internal fun MarkdownText(raw: String, modifier: Modifier = Modifier) {
         produceState(quick.orEmpty(), raw, FontSettings.revision, DshaFonts.ready) {
             value = quick ?: withContext(Dispatchers.Default) { MarkdownDocument.parse(raw) }
         }
-    SelectionContainer(modifier.testTag("markdown-message")) {
-        MarkdownBlocks(quick ?: asynchronous)
+    val blocks = quick ?: asynchronous
+    MarkdownSelectionContainer(body.testTag("markdown-message")) {
+        if (scrollable)
+            LazyColumn(
+                Modifier.testTag("markdown-fold-scroll"),
+                verticalArrangement = Arrangement.spacedBy(9.dp),
+            ) {
+                itemsIndexed(blocks) { index, block ->
+                    MarkdownBlocks(listOf(block), path = "/$index")
+                }
+            }
+        else MarkdownBlocks(blocks)
     }
 }
 
@@ -48,9 +61,14 @@ private fun MarkdownBlocks(
     ink: Color = ReadingStyle.ink,
     compact: Boolean = false,
     completed: Boolean = false,
+    path: String = "",
+    quote: String = "",
+    firstPrefix: String = "",
 ) {
     Column(modifier) {
         blocks.forEachIndexed { index, block ->
+            val prefix = quote + if (index == 0) firstPrefix else ""
+            val childPath = "$path/$index"
             val gap =
                 if (index == 0) 0.dp
                 else
@@ -66,7 +84,7 @@ private fun MarkdownBlocks(
             when (block) {
                 is MarkdownBlock.Paragraph ->
                     ProseText(
-                        block.text,
+                        MarkdownSelection.block(block.text, "prefix:$prefix"),
                         color = ink,
                         balanced = compact,
                         decoration =
@@ -75,7 +93,10 @@ private fun MarkdownBlocks(
                     )
                 is MarkdownBlock.Heading ->
                     ProseText(
-                        block.text,
+                        MarkdownSelection.block(
+                            block.text,
+                            "prefix:$prefix${"#".repeat(block.level)} ",
+                        ),
                         Modifier.testTag("markdown-heading"),
                         color = ink,
                         size =
@@ -88,6 +109,8 @@ private fun MarkdownBlocks(
                         weight = FontWeight(580),
                     )
                 is MarkdownBlock.Code -> MarkdownCode(block)
+                is MarkdownBlock.Fold -> MarkdownFold(block, childPath)
+                is MarkdownBlock.Formula -> MathMessage(block.raw)
                 is MarkdownBlock.Quote ->
                     MarkdownBlocks(
                         block.children,
@@ -104,57 +127,71 @@ private fun MarkdownBlocks(
                             .padding(start = 14.dp),
                         ink = ReadingStyle.secondary,
                         compact = true,
+                        path = childPath,
+                        quote = "$quote> ",
+                        firstPrefix = if (index == 0) firstPrefix else "",
                     )
                 is MarkdownBlock.Listing ->
                     Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                        block.items.forEach { item ->
+                        block.items.forEachIndexed { itemIndex, item ->
                             Row(
                                 Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(7.dp),
                             ) {
-                                if (item.checked != null)
-                                    Box(
-                                        Modifier.padding(top = 4.dp)
-                                            .size(13.dp)
-                                            .background(
-                                                if (item.checked) ReadingStyle.secondary
-                                                else Color.Transparent,
-                                                ContinuousShape(3.dp),
-                                            )
-                                            .border(
-                                                .8.dp,
-                                                ReadingStyle.secondary.copy(alpha = .6f),
-                                                ContinuousShape(3.dp),
-                                            ),
-                                        contentAlignment = Alignment.Center,
-                                    ) {
-                                        if (item.checked)
-                                            Icon(
-                                                AppIcons.Check,
-                                                "已完成",
-                                                Modifier.size(10.dp),
-                                                tint = Color.White,
-                                            )
-                                    }
-                                else
-                                    Text(
-                                        item.marker,
-                                        Modifier.widthIn(min = 17.dp),
-                                        color = ReadingStyle.secondary,
-                                        fontSize = 15.sp,
-                                        lineHeight = (15 * ExperienceSettings.lineSpacing).sp,
-                                    )
+                                DisableSelection {
+                                    if (item.checked != null)
+                                        Box(
+                                            Modifier.padding(top = 4.dp)
+                                                .size(13.dp)
+                                                .background(
+                                                    if (item.checked) ReadingStyle.secondary
+                                                    else Color.Transparent,
+                                                    ContinuousShape(3.dp),
+                                                )
+                                                .border(
+                                                    .8.dp,
+                                                    ReadingStyle.secondary.copy(alpha = .6f),
+                                                    ContinuousShape(3.dp),
+                                                ),
+                                            contentAlignment = Alignment.Center,
+                                        ) {
+                                            if (item.checked)
+                                                Icon(
+                                                    AppIcons.Check,
+                                                    "已完成",
+                                                    Modifier.size(10.dp),
+                                                    tint = Color.White,
+                                                )
+                                        }
+                                    else
+                                        Text(
+                                            item.marker,
+                                            Modifier.widthIn(min = 17.dp),
+                                            color = ReadingStyle.secondary,
+                                            fontSize = 15.sp,
+                                            lineHeight = (15 * ExperienceSettings.lineSpacing).sp,
+                                        )
+                                }
                                 MarkdownBlocks(
                                     item.children,
                                     Modifier.weight(1f),
                                     ink = if (item.checked == true) ReadingStyle.secondary else ink,
                                     compact = true,
                                     completed = item.checked == true,
+                                    path = "$childPath/$itemIndex",
+                                    quote = quote,
+                                    firstPrefix =
+                                        when (item.checked) {
+                                            true -> "- [x] "
+                                            false -> "- [ ] "
+                                            null ->
+                                                if (item.marker == "•") "- " else "${item.marker} "
+                                        },
                                 )
                             }
                         }
                     }
-                is MarkdownBlock.Table -> MarkdownTable(block)
+                is MarkdownBlock.Table -> MarkdownTable(block, childPath)
                 is MarkdownBlock.Image -> MarkdownImage(block)
                 MarkdownBlock.Rule ->
                     HorizontalDivider(
@@ -163,6 +200,33 @@ private fun MarkdownBlocks(
                         thickness = .75.dp,
                     )
             }
+        }
+    }
+}
+
+@Composable
+private fun MarkdownFold(block: MarkdownBlock.Fold, path: String) {
+    var expanded by
+        androidx.compose.runtime.saveable.rememberSaveable(path, block.title) {
+            mutableStateOf(block.initiallyOpen)
+        }
+    ActivityCard(Modifier.testTag("markdown-fold")) {
+        DisableSelection {
+            DisclosureHeader(
+                block.title.ifBlank { "详细内容" },
+                expanded,
+                Modifier.testTag("markdown-fold-toggle"),
+                icon = AppIcons.Description,
+            ) {
+                expanded = !expanded
+            }
+        }
+        DisclosureBody(expanded, Modifier.testTag("markdown-fold-body")) {
+            MarkdownText(
+                block.body,
+                Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                scrollable = true,
+            )
         }
     }
 }
@@ -196,37 +260,39 @@ private fun MarkdownCode(block: MarkdownBlock.Code) {
                 }
             }
             // Claude cached markup: caption and copy share the code surface, no toolbar divider.
-            Row(
-                Modifier.fillMaxWidth()
-                    .height(32.dp)
-                    .padding(start = 14.dp, end = 8.dp)
-                    .testTag("code-caption"),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    block.language.ifBlank { "纯文本" },
-                    Modifier.weight(1f),
-                    fontSize = 10.sp,
-                    color = ReadingStyle.secondary,
-                    maxLines = 1,
-                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                )
-                if (copied) Text("已复制", fontSize = 10.sp, color = ReadingStyle.secondary)
-                Box(
-                    Modifier.size(32.dp).clickable(
-                        role = androidx.compose.ui.semantics.Role.Button,
-                    ) {
-                        clipboard.setText(AnnotatedString(block.text))
-                        copied = true
-                    },
-                    contentAlignment = Alignment.Center,
+            DisableSelection {
+                Row(
+                    Modifier.fillMaxWidth()
+                        .height(32.dp)
+                        .padding(start = 14.dp, end = 8.dp)
+                        .testTag("code-caption"),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Icon(
-                        AppIcons.ContentCopy,
-                        "复制代码",
-                        Modifier.size(15.dp),
-                        tint = ReadingStyle.secondary,
+                    Text(
+                        block.language.ifBlank { "纯文本" },
+                        Modifier.weight(1f),
+                        fontSize = 10.sp,
+                        color = ReadingStyle.secondary,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                     )
+                    if (copied) Text("已复制", fontSize = 10.sp, color = ReadingStyle.secondary)
+                    Box(
+                        Modifier.size(32.dp).clickable(
+                            role = androidx.compose.ui.semantics.Role.Button,
+                        ) {
+                            clipboard.setText(AnnotatedString(block.text))
+                            copied = true
+                        },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            AppIcons.ContentCopy,
+                            "复制代码",
+                            Modifier.size(15.dp),
+                            tint = ReadingStyle.secondary,
+                        )
+                    }
                 }
             }
             val horizontal = rememberScrollState()
@@ -238,7 +304,7 @@ private fun MarkdownCode(block: MarkdownBlock.Code) {
                     .testTag("code-scroll-area"),
             ) {
                 Text(
-                    highlighted,
+                    MarkdownSelection.block(highlighted, "code:${block.language}"),
                     Modifier.verticalScroll(vertical)
                         .horizontalScroll(horizontal)
                         .padding(start = 14.dp, end = 14.dp, top = 3.dp, bottom = 14.dp),
@@ -309,7 +375,7 @@ private fun MarkdownImage(block: MarkdownBlock.Image) {
                     .clip(ContinuousShape(12.dp)),
         )
     else
-        TextButton(
+        DshaTextButton(
             onClick = {
                 if (block.url.startsWith("dsha://file/") && MarkdownDocument.safeLink(block.url))
                     FilePreviewState.open(block.url.substringAfterLast('/'))

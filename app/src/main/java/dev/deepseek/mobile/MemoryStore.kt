@@ -17,7 +17,6 @@ data class MemorySnapshot(
             when (scope) {
                 "global" -> "memory.md"
                 "persona" -> "persona_memory.md"
-                "session" -> "session_memory.md"
                 else -> "workplace_memory.md"
             }
 
@@ -25,8 +24,6 @@ data class MemorySnapshot(
         get() =
             if (scope == "global") "/dev.deepseek.mobile/memory.md"
             else if (scope == "persona") "/dev.deepseek.mobile/persona_memory.md"
-            else if (scope == "session")
-                "/dev.deepseek.mobile/sessions/$projectId/session_memory.md"
             else "/dev.deepseek.mobile/projects/$projectId/workplace_memory.md"
 
     fun json() =
@@ -37,8 +34,6 @@ data class MemorySnapshot(
             .put("sha256", sha256)
             .put("path", logicalPath)
 }
-
-data class MemoryProposal(val taskId: String, val before: MemorySnapshot, val after: String)
 
 /**
  * Shared Markdown files, bounded and atomic. CAS prevents one conversation erasing another's edit.
@@ -57,17 +52,13 @@ class MemoryStore(context: Context) {
     }
 
     private fun file(scope: String, projectId: String): File {
-        require(scope in setOf("global", "project", "session", "persona")) { "记忆范围无效" }
+        require(scope in setOf("global", "project", "persona")) { "记忆范围无效" }
         val target =
             if (scope == "global") File(root, "memory.md")
             else if (scope == "persona") File(root, "persona_memory.md")
             else {
                 require(projectId.matches(Regex("[a-f0-9-]{36}"))) { "项目 ID 无效" }
-                File(
-                    root,
-                    if (scope == "session") "sessions/$projectId/session_memory.md"
-                    else "projects/$projectId/workplace_memory.md",
-                )
+                File(root, "projects/$projectId/workplace_memory.md")
             }
         require(target.canonicalFile == target.absoluteFile) { "记忆路径不可含符号链接" }
         target.parentFile!!.mkdirs()
@@ -82,7 +73,7 @@ class MemoryStore(context: Context) {
             val text = String(AtomicFile(file).readFully(), Charsets.UTF_8)
             MemorySnapshot(
                 scope,
-                if (scope in setOf("project", "session")) projectId else "",
+                if (scope == "project") projectId else "",
                 text,
                 hash(text),
             )

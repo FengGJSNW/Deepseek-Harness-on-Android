@@ -1,0 +1,56 @@
+name: Verify DSHA
+on:
+  pull_request:
+  push:
+    branches: [main, master, 'codex/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      GOMAXPROCS: '4'
+      GOFLAGS: '-p=4'
+      CARGO_BUILD_JOBS: '4'
+      RUSTUP_TOOLCHAIN: '1.99.0'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install pinned Android build components
+        run: '"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.0" "build-tools;37.0.0" "ndk;28.2.13676358" "cmake;3.22.1"'
+      - name: Install pinned Flutter, Go and Rust
+        shell: bash
+        run: |
+          git clone --depth 1 --branch 3.47.6 https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+          test "$(git -C "$RUNNER_TEMP/flutter" rev-parse HEAD)" = 5fc346839b5d0eef006ed8404392afb4dfae428d
+          echo "FLUTTER_ROOT=$RUNNER_TEMP/flutter" >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+          curl -fsSL https://go.dev/dl/go1.27.0.linux-amd64.tar.gz -o "$RUNNER_TEMP/go.tar.gz"
+          curl -fsSL 'https://go.dev/dl/?mode=json&include=all' -o "$RUNNER_TEMP/go-releases.json"
+          checksum=$(jq -r '.[] | select(.version == "go1.27.0") | .files[] | select(.filename == "go1.27.0.linux-amd64.tar.gz") | .sha256' "$RUNNER_TEMP/go-releases.json")
+          test -n "$checksum"
+          echo "$checksum  $RUNNER_TEMP/go.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/go.tar.gz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/go/bin" >> "$GITHUB_PATH"
+          rustup toolchain install 1.99.0 --profile minimal --target aarch64-linux-android,x86_64-linux-android
+      - name: Build embedded FlClash
+        shell: pwsh
+        run: |
+          ./scripts/setup-flclash.ps1
+          ./scripts/build-flclash.ps1
+      - run: npm ci
+      - run: npm run verify

@@ -1,0 +1,17 @@
+{
+  "repository": "https://github.com/chen08209/FlClash.git",
+  "commit": "be84736605527034689c95bf27828ff27d912c5e",
+  "version": "0.9.3+2026110401",
+  "submodules": {
+    "core/Clash.Meta": "024245dc72bc92f48237f865119afe0cd53ac9e6",
+    "plugins/prism_ui": "63450c0ac0e8e1b2c0f3ed4ad7926dc94e083185"
+  },
+  "toolchains": {
+    "flutter": "3.47.6",
+    "flutterCommit": "5fc346839b5d0eef006ed8404392afb4dfae428d",
+    "go": "1.27.0",
+    "rust": "1.99.0",
+    "gradle": "9.8.0",
+    "androidGradlePlugin": "9.4.1"
+  }
+}

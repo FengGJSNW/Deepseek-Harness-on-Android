@@ -6,7 +6,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -49,7 +48,7 @@ internal fun ToolchainRequests(close: () -> Unit) {
             )
             if (item.optString("status") in setOf("pending", "interrupted", "failed"))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    TextButton(
+                    DshaTextButton(
                         onClick = {
                             manager.deny(item.getString("id"))
                             revision++
@@ -59,7 +58,7 @@ internal fun ToolchainRequests(close: () -> Unit) {
                     ) {
                         Text("拒绝")
                     }
-                    TextButton(
+                    DshaTextButton(
                         onClick = {
                             busy = true
                             status = "下载、验证并发布工具链…"
@@ -83,78 +82,6 @@ internal fun ToolchainRequests(close: () -> Unit) {
                 }
             else Text(item.optString("error"), fontSize = 12.sp, color = WhaleMuted)
         }
-    }
-}
-
-@Composable
-internal fun MemoryProposals(close: () -> Unit) {
-    val context = LocalContext.current
-    val manager = remember { HarnessCoordinator.get(context).contexts }
-    val jobs = rememberCoroutineScope()
-    var revision by remember { mutableIntStateOf(0) }
-    val proposals =
-        remember(revision) {
-            manager.proposals().let { a -> (0 until a.length()).map { a.getJSONObject(it) } }
-        }
-    var selected by remember { mutableStateOf<JSONObject?>(null) }
-    var message by remember { mutableStateOf("") }
-    WhaleSheet("记忆提案", "重启后未完成的确认会标为 interrupted，不会自动执行。可以在这里重新检查；版本冲突需在记忆编辑器手动合并。", close) {
-        Column(Modifier.heightIn(max = 280.dp).verticalScroll(rememberScrollState())) {
-            if (proposals.isEmpty()) SettingsStatusCard(AppIcons.Description, "暂无提案")
-            proposals.forEach { item ->
-                SettingsLink(
-                    AppIcons.Description,
-                    item.getString("scope") +
-                        " · " +
-                        item.optString("after").lineSequence().firstOrNull().orEmpty().take(32),
-                    item.optString("status"),
-                ) {
-                    selected = item
-                    message = ""
-                }
-            }
-        }
-        selected?.let { item ->
-            Text("提议的新内容", fontSize = 12.sp, color = WhaleMuted)
-            Text(
-                item.optString("after").take(5000),
-                modifier = Modifier.heightIn(max = 220.dp).verticalScroll(rememberScrollState()),
-                fontSize = 13.sp,
-                lineHeight = 21.sp,
-            )
-            if (item.optString("status") == "interrupted")
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    TextButton(
-                        onClick = {
-                            manager.settleProposal(item.getString("id"), "denied")
-                            selected = null
-                            revision++
-                        },
-                    ) {
-                        Text("拒绝")
-                    }
-                    TextButton(
-                        onClick = {
-                            jobs.launch {
-                                runCatching {
-                                    withContext(Dispatchers.IO) {
-                                        manager.applyProposalFromUser(item.getString("id"))
-                                    }
-                                }
-                                    .onSuccess {
-                                        selected = null
-                                        message = "已保存"
-                                    }
-                                    .onFailure { message = it.message.orEmpty() }
-                                revision++
-                            }
-                        },
-                    ) {
-                        Text("批准这次修改")
-                    }
-                }
-        }
-        if (message.isNotBlank()) Text(message, fontSize = 12.sp, color = Color(0xFFB17A2C))
     }
 }
 

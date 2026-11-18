@@ -15,7 +15,9 @@ class SkillsMihomoSettingsTest {
         ui.waitUntil(30000) { AssistantState.ready && DshaFonts.ready }
         ui.runOnUiThread {
             ui.activity.setContent {
-                MaterialTheme { FontEnvironment { SettingsScreen(onCreatePlugin = {}) {} } }
+                MaterialTheme {
+                    FontEnvironment { SettingsScreen(entry = "toolbox", onCreatePlugin = {}) {} }
+                }
             }
         }
         ui.onNodeWithText("扩展").performScrollTo().performClick()

@@ -36,34 +36,37 @@ internal fun CredentialSettings(back: () -> Unit) {
         name = ""
         result = ""
     }
-    Column(Modifier.fillMaxSize()) {
-        Row(
-            Modifier.fillMaxWidth().height(58.dp).padding(horizontal = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            SmallIcon(AppIcons.ArrowBack, "返回") {
-                if (adding || selected != null) {
-                    adding = false
-                    selected = null
-                    key = ""
-                    name = ""
-                    result = ""
-                } else back()
+    FadingHeaderLayout(
+        height = 58.dp,
+        header = {
+            Row(
+                Modifier.fillMaxWidth().height(58.dp).padding(horizontal = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                SmallIcon(AppIcons.ArrowBack, "返回") {
+                    if (adding || selected != null) {
+                        adding = false
+                        selected = null
+                        key = ""
+                        name = ""
+                        result = ""
+                    } else back()
+                }
+                Text(
+                    when {
+                        selected != null -> "密钥详情"
+                        else -> "DeepSeek API Key"
+                    },
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
             }
-            Text(
-                when {
-                    selected != null -> "密钥详情"
-                    else -> "DeepSeek API Key"
-                },
-                fontSize = 18.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
-        }
+        },
+    ) { topInset ->
         Column(
-            Modifier.weight(1f)
-                .fillMaxWidth()
+            Modifier.fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 24.dp, vertical = 12.dp),
+                .padding(start = 24.dp, end = 24.dp, top = topInset + 12.dp, bottom = 12.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             when {
@@ -76,7 +79,7 @@ internal fun CredentialSettings(back: () -> Unit) {
                     )
                     Text(info.masked, fontSize = 14.sp, color = WhaleMuted)
                     if (!info.selected)
-                        TextButton(
+                        DshaTextButton(
                             onClick = {
                                 AgentService.current?.perform(
                                     "select_key",
@@ -88,7 +91,7 @@ internal fun CredentialSettings(back: () -> Unit) {
                             Text("使用此密钥")
                         }
                     else Text("正在使用", fontSize = 12.sp, color = WhaleBlue)
-                    TextButton(
+                    DshaTextButton(
                         onClick = {
                             testing = true
                             result = ""
@@ -106,12 +109,12 @@ internal fun CredentialSettings(back: () -> Unit) {
                     }
                     if (result.isNotBlank()) Text(result, fontSize = 12.sp, color = WhaleMuted)
                     HorizontalDivider(color = WhaleLine)
-                    TextButton(onClick = { deleting = true }, enabled = !state.busy) {
+                    DshaTextButton(onClick = { deleting = true }, enabled = !state.busy) {
                         Text("删除", color = Color(0xFFBC656B))
                     }
                 }
                 else -> {
-                    TextButton(onClick = { adding = true }) {
+                    DshaTextButton(onClick = { adding = true }) {
                         Icon(AppIcons.Add, null, Modifier.size(18.dp))
                         Text("添加密钥", Modifier.padding(start = 8.dp))
                     }
@@ -183,7 +186,7 @@ internal fun CredentialSettings(back: () -> Unit) {
                     enabled = !saving,
                     visualTransformation = UprightSymbols.transformation,
                 )
-                Button(
+                DshaButton(
                     onClick = {
                         saving = true
                         AgentService.current?.perform(
@@ -214,8 +217,8 @@ internal fun CredentialSettings(back: () -> Unit) {
     if (deleting && info != null)
         WhaleSheet("删除密钥？", "仅从此设备移除“${info.name}”。", { deleting = false }) {
             Row(Modifier.align(Alignment.End)) {
-                TextButton(onClick = { deleting = false }) { Text("取消") }
-                TextButton(
+                DshaTextButton(onClick = { deleting = false }) { Text("取消") }
+                DshaTextButton(
                     onClick = {
                         AgentService.current?.perform(
                             "delete_key",

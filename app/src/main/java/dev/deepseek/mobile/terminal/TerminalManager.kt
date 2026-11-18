@@ -105,15 +105,20 @@ class TerminalManager(
             val conversation =
                 AssistantState.sessions.firstOrNull { it.id == task?.sessionId }
                     ?: AssistantState.sessions.firstOrNull { it.id == AssistantState.selectedId }
-            val scope =
-                if (task != null) harness.runtimes.scope(task)
-                else if (conversation?.projectId?.isNotBlank() == true)
-                    dev.deepseek.mobile.harness.WorkspaceScope("project", conversation.projectId)
-                else
-                    dev.deepseek.mobile.harness.WorkspaceScope(
-                        "session",
-                        requireNotNull(conversation).id,
+            val sandboxId =
+                task?.sandboxId?.takeIf(String::isNotBlank) ?: conversation?.sandboxId.orEmpty()
+            if (sandboxId.isBlank())
+                return JSONObject()
+                    .put("selectedLevel", "sandbox")
+                    .put(
+                        "connection",
+                        JSONObject()
+                            .put("phase", "unselected")
+                            .put("ready", false)
+                            .put("detail", "请先选择并授权一个 Sandbox"),
                     )
+                    .put("androidRoot", false)
+            val scope = dev.deepseek.mobile.harness.WorkspaceScope("sandbox", sandboxId)
             val info = harness.runtimes.info(scope)
             return JSONObject()
                 .put("selectedLevel", "sandbox")
@@ -135,7 +140,7 @@ class TerminalManager(
                 )
                 .put(
                     "message",
-                    "真实 Linux 虚拟机，首次 terminal_exec 时创建。Guest Root 不是 Android Root；不挂载 Android 私有目录。工具仅在初始化成功后可用。",
+                    "使用用户创建并授权的 Sandbox。Guest Root 不是 Android Root；不挂载 Android 私有目录。工具仅在初始化成功后可用。",
                 )
         }
         val state = connections.state(level)
@@ -176,7 +181,8 @@ class TerminalManager(
         task: PhoneTask,
         args: JSONObject,
         overrideSnapshot: TerminalSnapshot? = null,
-    ): JSONObject = executeCommand(task, args, overrideSnapshot, null, null)
+        sandboxId: String = task.sandboxId,
+    ): JSONObject = executeCommand(task, args, overrideSnapshot, null, null, sandboxId)
 
     internal suspend fun executeManually(
         task: PhoneTask,
@@ -199,11 +205,26 @@ class TerminalManager(
         overrideSnapshot: TerminalSnapshot?,
         onManualRun: ((TerminalRun) -> Unit)?,
         confirmManual: (suspend (String) -> Boolean)?,
+        sandboxId: String = "",
     ): JSONObject {
         check(task.access !in setOf("none", "read")) { "完全禁止模式仅支持聊天" }
-        check(task.terminalEnabled) { "本任务未启用终端" }
-        val snapshot = overrideSnapshot ?: TerminalSnapshot.from(JSONObject(task.terminalConfig))
+        check(
+            task.terminalEnabled ||
+                sandboxId.isNotBlank() && sandboxId in task.sandboxIds.orEmpty(),
+        ) {
+            "本任务未启用此终端"
+        }
+        check(sandboxId.isBlank() && !task.sandboxOnly || task.acceptsSandbox(sandboxId)) {
+            "此 Sandbox 不在本任务获准访问的范围内"
+        }
+        val snapshot =
+            overrideSnapshot
+                ?: if (sandboxId.isNotBlank() && task.sandboxId.isBlank()) config.load("sandbox")
+                else TerminalSnapshot.from(JSONObject(task.terminalConfig))
+        check(!task.sandboxOnly || snapshot.level == "sandbox") { "当前任务只能使用 Sandbox" }
         val level = TerminalLevel.of(snapshot.level)
+        val restricted = task.access != "full"
+        val permissionContext = harness.context(task).copy(environment = level.key)
         val home = workspace(level, task.sessionId)
         val cwd = normalizePath(args.optString("cwd").ifBlank { home }, home)
         val command = args.getString("command")
@@ -230,11 +251,11 @@ class TerminalManager(
         } else onManualRun(run)
         try {
             if (level == TerminalLevel.SANDBOX)
-                return executeSandbox(task, args, run, snapshot, confirmManual)
+                return executeSandbox(task, args, run, snapshot, confirmManual, sandboxId)
 
             if (
                 harness.permissions.requiresBroker(
-                    harness.context(task),
+                    permissionContext,
                     setOf(
                         dev.deepseek.mobile.harness.Capability.NETWORK,
                         dev.deepseek.mobile.harness.Capability.WORKSPACE_READ,
@@ -253,21 +274,22 @@ class TerminalManager(
                 }
             val permission =
                 harness.permissions.evaluate(
-                    harness.context(task).copy(environment = level.key),
+                    permissionContext,
                     capability,
                     command,
                 )
             if (permission.effect == dev.deepseek.mobile.harness.PermissionEffect.DENY)
                 return deny(run, permission.reason)
             if (permission.effect == dev.deepseek.mobile.harness.PermissionEffect.ASK) {
+                if (confirmManual == null && task.access != "ask")
+                    return deny(run, "显式权限规则要求人工批准：${permission.reason}")
                 val approved =
                     if (confirmManual != null) confirmManual(permission.reason)
-                    else task.access != "auto" && approve(task, run, permission.reason) != "deny"
+                    else approve(task, run, permission.reason) != "deny"
                 if (!approved) return deny(run, "此命令未获人工批准")
                 if (
-                    harness.permissions
-                        .evaluate(harness.context(task), capability, command)
-                        .effect == dev.deepseek.mobile.harness.PermissionEffect.DENY
+                    harness.permissions.evaluate(permissionContext, capability, command).effect ==
+                        dev.deepseek.mobile.harness.PermissionEffect.DENY
                 )
                     return deny(run, "等待期间权限规则改变")
             }
@@ -292,7 +314,7 @@ class TerminalManager(
             var timeout = args.optInt("timeout_seconds", 30).coerceIn(1, 300)
             var outputLimit = 65536
             var sensitiveApproved = false
-            if (task.access != "full") {
+            if (restricted) {
                 val policy = TerminalPolicy(snapshot.rules)
                 var inspection = policy.inspect(command, cwd, home)
                 plan = inspection.plan
@@ -331,6 +353,7 @@ class TerminalManager(
                     sensitiveApproved = inspection.decision == RuleDecision.SENSITIVE
                     if (sensitiveApproved && !confirmManual(inspection.reasons.joinToString("\n")))
                         return deny(run, "用户拒绝本次命令")
+                    if (sensitiveApproved) run.reason = "用户已批准本次命令"
                 } else {
                     val grantKey =
                         policy.grantKey(task.sessionId, snapshot, cwd, requireNotNull(plan))
@@ -367,6 +390,9 @@ class TerminalManager(
                         val answer = approve(task, run, run.reason)
                         if (answer == "deny") return deny(run, "用户拒绝本次命令")
                         if (answer == "similar") grants.add(grantKey)
+                        run.reason = "用户已批准本次命令"
+                    } else if (sensitive) {
+                        run.reason = "已使用用户保存的同类命令批准"
                     }
                     sensitiveApproved = sensitive
                 }
@@ -374,7 +400,7 @@ class TerminalManager(
             currentCoroutineContext().ensureActive()
             run.stage = "starting"
             run.status = "running"
-            val executed = if (task.access == "full") command else requireNotNull(plan).shell()
+            val executed = if (restricted) requireNotNull(plan).shell() else command
             if (level == TerminalLevel.ISOLATED) {
                 val interpreter = IsolatedTerminal(context, task.sessionId)
                 val isolatedPlan = plan ?: CommandParser.parse(command)
@@ -427,13 +453,12 @@ class TerminalManager(
                                     .put("command", executed)
                                     .put(
                                         "proxy_port",
-                                        dev.deepseek.mobile.proxy.MihomoManager.get(context)
+                                        dev.deepseek.mobile.proxy.FlClashRuntime.get(context)
                                             .terminalPort(),
                                     )
                                     .put(
                                         "rules",
-                                        if (task.access == "full") JSONObject.NULL
-                                        else snapshot.rules,
+                                        if (restricted) snapshot.rules else JSONObject.NULL,
                                     )
                                     .put("sensitive_approved", sensitiveApproved)
                                     .put(
@@ -536,8 +561,9 @@ class TerminalManager(
         run: TerminalRun,
         snapshot: TerminalSnapshot,
         confirmManual: (suspend (String) -> Boolean)?,
+        sandboxId: String,
     ): JSONObject {
-        val permissionContext = harness.context(task)
+        val permissionContext = harness.context(task).copy(environment = "sandbox")
         try {
             val permission =
                 harness.permissions.evaluate(
@@ -583,10 +609,10 @@ class TerminalManager(
             }
             if (
                 confirmManual == null &&
-                    task.access == "auto" &&
+                    task.access != "ask" &&
                     permission.effect == dev.deepseek.mobile.harness.PermissionEffect.ASK
             )
-                return deny(run, "此规则需要人工批准；替我审批模式不会弹出审批框")
+                return deny(run, "显式权限规则要求人工批准：${permission.reason}")
             if (
                 (sensitive &&
                     (confirmManual != null || (task.access != "auto" && grantKey !in grants))) ||
@@ -606,6 +632,7 @@ class TerminalManager(
                     "deny" -> return deny(run, "用户拒绝本次命令")
                     "similar" -> grants.add(grantKey)
                 }
+                run.reason = "用户已批准本次命令"
                 if (
                     harness.permissions
                         .evaluate(
@@ -616,6 +643,8 @@ class TerminalManager(
                         .effect == dev.deepseek.mobile.harness.PermissionEffect.DENY
                 )
                     return deny(run, "等待期间权限规则已变更")
+            } else if (sensitive && grantKey in grants && task.access == "ask") {
+                run.reason = "已使用用户保存的同类命令批准"
             }
             run.status = "running"
             run.stage = "runtime"
@@ -639,6 +668,7 @@ class TerminalManager(
                         if (channel == "out") run.output += text else run.stderr += text
                     },
                     worktreeId = harness.worktreeId(task, args),
+                    sandboxId = sandboxId,
                 )
             run.executionStarted = true
             run.output = output.getString("stdout")
@@ -665,6 +695,7 @@ class TerminalManager(
                 .put("guestUid", 0)
                 .put("androidRoot", false)
                 .put("worktreeId", output.optString("worktreeId"))
+                .put("sandboxId", sandboxId)
         } finally {
             harness.permissions.finish(permissionContext)
         }

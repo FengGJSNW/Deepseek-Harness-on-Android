@@ -54,6 +54,30 @@ internal object TestSnapshots {
         return bitmap
     }
 
+    @androidx.annotation.RequiresApi(34)
+    private fun copyPopup(
+        ui: AndroidComposeTestRule<ActivityScenarioRule<MainActivity>, MainActivity>,
+        view: View,
+    ): Bitmap {
+        val done = CountDownLatch(1)
+        var status = -1
+        lateinit var bitmap: Bitmap
+        ui.runOnUiThread {
+            bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+            PixelCopy.request(
+                PixelCopy.Request.Builder.ofWindow(view).setDestinationBitmap(bitmap).build(),
+                ui.activity.mainExecutor,
+            ) { result ->
+                status = result.status
+                done.countDown()
+            }
+        }
+        check(done.await(5, TimeUnit.SECONDS) && status == PixelCopy.SUCCESS) {
+            "Owned popup copy failed: $status"
+        }
+        return bitmap
+    }
+
     fun capture(
         ui: AndroidComposeTestRule<ActivityScenarioRule<MainActivity>, MainActivity>,
         name: String,
@@ -79,6 +103,17 @@ internal object TestSnapshots {
                     }
         }
         val image = copy(ui, main)
+        if (name == "086-project-submenu-settled" || name == "086-session-peel-112ms") {
+            File(ui.activity.filesDir, "v060-$name-main.png").outputStream().use {
+                image.compress(Bitmap.CompressFormat.PNG, 100, it)
+            }
+            File(ui.activity.filesDir, "v060-$name-windows.txt")
+                .writeText(
+                    layers.joinToString("\n") {
+                        "${it.x},${it.y} ${it.view.width}x${it.view.height}"
+                    },
+                )
+        }
         val canvas = Canvas(image)
         layers.forEach { layer ->
             val window = layer.window
@@ -107,6 +142,11 @@ internal object TestSnapshots {
                         0,
                     ),
                 )
+                canvas.drawBitmap(bitmap, layer.x.toFloat(), layer.y.toFloat(), null)
+                bitmap.recycle()
+            } else if (android.os.Build.VERSION.SDK_INT >= 34) {
+                // A software draw disables RenderEffect and cannot validate glass pixels.
+                val bitmap = copyPopup(ui, layer.view)
                 canvas.drawBitmap(bitmap, layer.x.toFloat(), layer.y.toFloat(), null)
                 bitmap.recycle()
             } else

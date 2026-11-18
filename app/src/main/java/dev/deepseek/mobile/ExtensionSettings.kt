@@ -115,7 +115,7 @@ internal fun ExtensionSettings(conversation: Conversation, onCreatePlugin: () ->
                     maxLines = 2,
                 )
                 Row {
-                    TextButton(
+                    DshaTextButton(
                         onClick = {
                             if (item.optBoolean("enabled")) {
                                 manager.store.saveFromUser(
@@ -128,9 +128,9 @@ internal fun ExtensionSettings(conversation: Conversation, onCreatePlugin: () ->
                     ) {
                         Text(if (item.optBoolean("enabled")) "停用" else "启用")
                     }
-                    TextButton(onClick = { edit = JSONObject(item.toString()) }) { Text("编辑") }
+                    DshaTextButton(onClick = { edit = JSONObject(item.toString()) }) { Text("编辑") }
                     if (kind == "mcp" && item.optBoolean("enabled"))
-                        TextButton(
+                        DshaTextButton(
                             onClick = {
                                 jobs.launch {
                                     status = "连接中…"
@@ -167,7 +167,7 @@ internal fun ExtensionSettings(conversation: Conversation, onCreatePlugin: () ->
                         ) {
                             Text("测试")
                         }
-                    TextButton(
+                    DshaTextButton(
                         onClick = {
                             manager.store.deleteFromUser(kind, item.getString("id"))
                             manager.secrets.set(item.getString("id"), "")
@@ -228,8 +228,8 @@ internal fun ExtensionSettings(conversation: Conversation, onCreatePlugin: () ->
                     color = WhaleMuted,
                 )
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                TextButton(onClick = { review = null }) { Text("取消") }
-                TextButton(
+                DshaTextButton(onClick = { review = null }) { Text("取消") }
+                DshaTextButton(
                     onClick = {
                         runCatching { manager.store.saveFromUser(kind, item, approved = true) }
                             .onSuccess {
@@ -336,8 +336,8 @@ private fun ExtensionEditor(
             if (error.isNotBlank()) Text(error, color = Color(0xFFB17A2C), fontSize = 12.sp)
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            TextButton(onClick = close) { Text("取消") }
-            TextButton(
+            DshaTextButton(onClick = close) { Text("取消") }
+            DshaTextButton(
                 onClick = {
                     runCatching {
                         val value =
@@ -393,8 +393,8 @@ private fun PermissionRulesEditor(manager: PermissionManager, close: () -> Unit)
         )
         if (error.isNotBlank()) Text(error, fontSize = 12.sp, color = Color(0xFFB17A2C))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            TextButton(onClick = close) { Text("取消") }
-            TextButton(
+            DshaTextButton(onClick = close) { Text("取消") }
+            DshaTextButton(
                 onClick = {
                     runCatching { manager.saveFromUser(text) }
                         .onSuccess { close() }

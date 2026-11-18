@@ -12,7 +12,7 @@ import org.json.JSONObject
 
 internal data class WorkspaceScope(val kind: String, val id: String) {
     init {
-        require(kind in setOf("project", "session"))
+        require(kind in setOf("project", "session", "sandbox"))
         require(id.matches(Regex("[a-f0-9-]{36}")))
     }
 
@@ -54,6 +54,14 @@ internal class WorkspaceManager(private val context: Context) {
     companion object {
         private val lock = Any()
         const val MAX_BYTES = 256L * 1024 * 1024
+
+        fun directoryPath(path: String): String =
+            when (path) {
+                "",
+                "/workspace",
+                "/workspace/" -> ""
+                else -> validPath(path.removePrefix("/workspace/").trimEnd('/'))
+            }
 
         fun digest(bytes: ByteArray) =
             MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") {
@@ -108,7 +116,9 @@ internal class WorkspaceManager(private val context: Context) {
     fun workspace(scope: WorkspaceScope): File =
         File(
                 root,
-                "${if (scope.kind == "project") "projects" else "sessions"}/${scope.id}/workspace",
+                "${when (scope.kind) { "project" -> "projects"
+ "session" -> "sessions"
+ else -> error("Sandbox 文件仅存在于虚拟机内") }}/${scope.id}/workspace",
             )
             .apply { mkdirs() }
 

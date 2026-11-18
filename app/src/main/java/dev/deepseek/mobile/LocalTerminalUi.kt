@@ -26,16 +26,19 @@ import org.json.JSONObject
 
 internal object LocalTerminalState {
     var sessionId by mutableStateOf("")
-
-    fun open(id: String) {
-        WorkspaceState.open(WorkspaceTab.Terminal)
-        sessionId = id
-    }
+    var sandboxId by mutableStateOf("")
 }
 
 @SuppressLint("SetJavaScriptEnabled", "JavascriptInterface")
 @Composable
-internal fun LocalTerminalPane(conversation: Conversation) {
+internal fun LocalTerminalPane(
+    conversation: Conversation,
+    sandboxId: String = LocalTerminalState.sandboxId,
+) {
+    val dark = sandboxId.isNotBlank()
+    val background = if (dark) Color.Black else Color(0xFFFAFAF9)
+    val foreground = if (dark) Color(0xFFE4E7EB) else WhaleInk
+    val muted = if (dark) Color(0xFF9CA7B2) else WhaleMuted
     val id = conversation.id
     val context = LocalContext.current
     val harness = remember(context) { HarnessCoordinator.get(context) }
@@ -58,7 +61,7 @@ internal fun LocalTerminalPane(conversation: Conversation) {
         }
     val scope = rememberCoroutineScope()
     val info by harness.runtimes.states.collectAsState()
-    val domain = harness.runtimes.scope(task)
+    val domain = WorkspaceScope("sandbox", sandboxId)
     var terminal by remember { mutableStateOf<RuntimeTerminal?>(null) }
     var view by remember { mutableStateOf<WebView?>(null) }
     var ready by remember { mutableStateOf(false) }
@@ -78,7 +81,7 @@ internal fun LocalTerminalPane(conversation: Conversation) {
         view?.evaluateJavascript("window.consoleOutput(${JSONObject.quote(encoded)})", null)
     }
     var attempt by remember { mutableIntStateOf(0) }
-    LaunchedEffect(id, attempt) {
+    LaunchedEffect(id, sandboxId, attempt) {
         android.util.Log.d("DSHA-Console", "Opening local terminal")
         try {
             val permission =
@@ -91,6 +94,7 @@ internal fun LocalTerminalPane(conversation: Conversation) {
             terminal =
                 harness.runtimes.openTerminal(
                     task,
+                    sandboxId = sandboxId,
                     onData = { _, bytes ->
                         scope.launch(Dispatchers.Main.immediate) { write(bytes) }
                     },
@@ -117,10 +121,11 @@ internal fun LocalTerminalPane(conversation: Conversation) {
     }
     suspend fun save(active: RuntimeTerminal) {
         harness.runtimes.closeTerminal(active)
+        val tree = active.tree ?: return
         val merged =
             withContext(Dispatchers.IO) {
                 harness.runtimes.resolveWorktree(
-                    harness.workspaces.load(active.tree.scope, active.tree.taskId),
+                    harness.workspaces.load(tree.scope, tree.taskId),
                     true,
                     PermissionContext(sessionId = id, projectId = task.projectId, actor = "user"),
                 ) {
@@ -148,43 +153,54 @@ internal fun LocalTerminalPane(conversation: Conversation) {
         }
     }
     Column(
-        Modifier.fillMaxSize().background(Color(0xFFFAFAF9)).testTag("local-terminal"),
+        Modifier.fillMaxSize().background(background).testTag("local-terminal"),
     ) {
         Row(
             Modifier.fillMaxWidth().height(60.dp).padding(horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            SmallIcon(AppIcons.ArrowBack, "保存并关闭终端") { close() }
+            DshaIconButton("保存并关闭终端", ::close, size = 42.dp) {
+                Icon(AppIcons.ArrowBack, null, Modifier.size(19.dp), tint = foreground)
+            }
             Column(Modifier.weight(1f)) {
-                Text("本地终端", fontSize = 16.sp, fontWeight = FontWeight.Medium)
                 Text(
-                    conversation.title + " · /workspace",
+                    if (sandboxId.isBlank()) "本地终端" else "Sandbox · root",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = foreground,
+                )
+                Text(
+                    (if (sandboxId.isBlank()) conversation.title
+                    else
+                        dev.deepseek.mobile.runtime.SandboxManager.get(context)
+                            .get(sandboxId)
+                            ?.name
+                            .orEmpty()) + " · /workspace",
                     fontSize = 10.sp,
-                    color = WhaleMuted,
+                    color = muted,
                     maxLines = 1,
                 )
             }
-            TextButton(
+            DshaTextButton(
                 onClick = { sendInput("\u0003") },
                 enabled = terminal != null && processExited == null,
             ) {
                 Text("Ctrl+C", fontSize = 11.sp)
             }
         }
-        HorizontalDivider(color = WhaleLine)
         processExited?.let { code ->
             Text(
                 "进程已退出 · $code",
                 Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                     .testTag("terminal-process-exit"),
                 fontSize = 12.sp,
-                color = WhaleMuted,
+                color = muted,
             )
         }
         if (error.isNotBlank()) {
             Text(error, Modifier.padding(16.dp), color = Color(0xFFB55950), fontSize = 12.sp)
             if (terminal == null)
-                TextButton(
+                DshaTextButton(
                     onClick = {
                         error = ""
                         attempt++
@@ -203,80 +219,88 @@ internal fun LocalTerminalPane(conversation: Conversation) {
                     if (closing) "保存工作区与环境…" else info[domain.key]?.detail ?: "准备终端…",
                     Modifier.padding(start = 10.dp),
                     fontSize = 12.sp,
-                    color = WhaleMuted,
+                    color = muted,
                 )
             }
         }
-        AndroidView(
-            factory = { c ->
-                WebView(c).apply {
-                    settings.javaScriptEnabled = true
-                    settings.allowFileAccess = false
-                    settings.allowContentAccess = false
-                    settings.domStorageEnabled = false
-                    settings.javaScriptCanOpenWindowsAutomatically = false
-                    settings.setSupportMultipleWindows(false)
-                    isSaveEnabled = false
-                    webViewClient =
-                        LocalDocumentClient(
-                            c,
-                            "console",
-                            setOf("console.html", "console.js", "console.css", "xterm.css"),
-                            setOf("jetbrains_mono.ttf", "noto_sans_sc.ttf"),
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            AndroidView(
+                factory = { c ->
+                    WebView(c).apply {
+                        setBackgroundColor(
+                            if (dark) android.graphics.Color.BLACK else 0xFFFAFAF9.toInt(),
                         )
-                    addJavascriptInterface(
-                        object {
-                            @JavascriptInterface
-                            fun ready() {
-                                scope.launch(Dispatchers.Main.immediate) {
-                                    ready = true
-                                    write(pending.toByteArray())
-                                    pending.reset()
-                                }
-                            }
-
-                            @JavascriptInterface
-                            fun input(text: String) {
-                                if (text.length <= 65536)
-                                    scope.launch(Dispatchers.Main.immediate) { sendInput(text) }
-                            }
-
-                            @JavascriptInterface
-                            fun resize(height: Int, width: Int) {
-                                scope.launch(Dispatchers.Main.immediate) {
-                                    if (
-                                        height in 4..200 &&
-                                            width in 10..300 &&
-                                            (rows != height || cols != width)
-                                    ) {
-                                        rows = height
-                                        cols = width
-                                        terminal?.let { it.vm.resize(it.id, rows, cols) }
+                        settings.javaScriptEnabled = true
+                        settings.allowFileAccess = false
+                        settings.allowContentAccess = false
+                        settings.domStorageEnabled = false
+                        settings.javaScriptCanOpenWindowsAutomatically = false
+                        settings.setSupportMultipleWindows(false)
+                        isSaveEnabled = false
+                        webViewClient =
+                            LocalDocumentClient(
+                                c,
+                                "console",
+                                setOf("console.html", "console.js", "console.css", "xterm.css"),
+                                setOf("jetbrains_mono.ttf", "noto_sans_sc.ttf"),
+                            )
+                        addJavascriptInterface(
+                            object {
+                                @JavascriptInterface
+                                fun ready() {
+                                    scope.launch(Dispatchers.Main.immediate) {
+                                        ready = true
+                                        write(pending.toByteArray())
+                                        pending.reset()
                                     }
                                 }
-                            }
-                        },
-                        "ConsoleNative",
-                    )
-                    view = this
-                    loadUrl("https://document.dsha.invalid/assets/console.html")
-                }
-            },
-            update = { web ->
-                if (ready)
-                    web.evaluateJavascript(
-                        "window.consoleConfigure(${JSONObject().put("size", 12.5f * fontScale).put("system", FontSettings.preset == FontPreset.SYSTEM)})",
-                        null,
-                    )
-            },
-            modifier = Modifier.weight(1f).fillMaxWidth().testTag("terminal-emulator"),
-            onRelease = {
-                it.removeJavascriptInterface("ConsoleNative")
-                it.destroy()
-                view = null
-            },
-        )
-        HorizontalDivider(color = WhaleLine)
+
+                                @JavascriptInterface
+                                fun input(text: String) {
+                                    if (text.length <= 65536)
+                                        scope.launch(Dispatchers.Main.immediate) { sendInput(text) }
+                                }
+
+                                @JavascriptInterface
+                                fun resize(height: Int, width: Int) {
+                                    scope.launch(Dispatchers.Main.immediate) {
+                                        if (
+                                            height in 4..200 &&
+                                                width in 10..300 &&
+                                                (rows != height || cols != width)
+                                        ) {
+                                            rows = height
+                                            cols = width
+                                            terminal?.let { it.vm.resize(it.id, rows, cols) }
+                                        }
+                                    }
+                                }
+                            },
+                            "ConsoleNative",
+                        )
+                        view = this
+                        loadUrl(
+                            "https://document.dsha.invalid/assets/console.html" +
+                                if (dark) "#sandbox" else "",
+                        )
+                    }
+                },
+                update = { web ->
+                    if (ready)
+                        web.evaluateJavascript(
+                            "window.consoleConfigure(${JSONObject().put("size", 12.5f * fontScale).put("system", FontSettings.preset == FontPreset.SYSTEM)})",
+                            null,
+                        )
+                },
+                modifier = Modifier.fillMaxSize().testTag("terminal-emulator"),
+                onRelease = {
+                    it.removeJavascriptInterface("ConsoleNative")
+                    it.destroy()
+                    view = null
+                },
+            )
+            HeaderFade(Modifier.fillMaxWidth().height(20.dp), color = background)
+        }
         Row(
             Modifier.fillMaxWidth()
                 .horizontalScroll(rememberScrollState())
@@ -285,7 +309,7 @@ internal fun LocalTerminalPane(conversation: Conversation) {
         ) {
             listOf("Esc" to "\u001b", "Tab" to "\t", "Ctrl+D" to "\u0004").forEach { (label, value)
                 ->
-                TextButton(
+                DshaTextButton(
                     onClick = { sendInput(value) },
                     enabled = terminal != null && processExited == null,
                 ) {
@@ -294,15 +318,17 @@ internal fun LocalTerminalPane(conversation: Conversation) {
             }
             listOf(0f to "\u001b[A", 180f to "\u001b[B", 270f to "\u001b[D", 90f to "\u001b[C")
                 .forEach { (rotation, value) ->
-                    IconButton(
+                    DshaIconButton(
+                        "方向键",
                         onClick = { sendInput(value) },
                         enabled = terminal != null && processExited == null,
-                        modifier = Modifier.size(40.dp),
+                        size = 40.dp,
                     ) {
                         Icon(
                             AppIcons.ArrowUpward,
                             "方向键",
                             Modifier.size(16.dp).graphicsLayer { rotationZ = rotation },
+                            tint = foreground,
                         )
                     }
                 }

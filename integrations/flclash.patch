@@ -1,0 +1,1762 @@
+diff --git a/.gitignore b/.gitignore
+index 9d33b61..85591ce 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -79,3 +79,5 @@ devtools_options.yaml
+ .fvm/
+ .fvmrc
+ /coverage/lcov.info
++.android/
++.ios/
+diff --git a/.metadata b/.metadata
+index 2e80cfe..1cd9a44 100644
+--- a/.metadata
++++ b/.metadata
+@@ -4,27 +4,7 @@
+ # This file should be version controlled and should not be manually edited.
+ 
+ version:
+-  revision: "adc901062556672b4138e18a4dc62a4be8f4b3c2"
+-  channel: "stable"
++  revision: "5fc346839b5d0eef006ed8404392afb4dfae428d"
++  channel: "[user-branch]"
+ 
+-project_type: app
+-
+-# Tracks metadata for the flutter migrate command
+-migration:
+-  platforms:
+-    - platform: root
+-      create_revision: adc901062556672b4138e18a4dc62a4be8f4b3c2
+-      base_revision: adc901062556672b4138e18a4dc62a4be8f4b3c2
+-    - platform: windows
+-      create_revision: adc901062556672b4138e18a4dc62a4be8f4b3c2
+-      base_revision: adc901062556672b4138e18a4dc62a4be8f4b3c2
+-
+-  # User provided section
+-
+-  # List of Local paths (relative to this file) that should be
+-  # ignored by the migrate tool.
+-  #
+-  # Files that are not part of the templates will be ignored by default.
+-  unmanaged_files:
+-    - 'lib/main.dart'
+-    - 'ios/Runner.xcodeproj/project.pbxproj'
++project_type: module
+diff --git a/android/app/src/main/kotlin/com/follow/clash/MainActivity.kt b/android/app/src/main/kotlin/com/follow/clash/MainActivity.kt
+index ac28b8c..2344bcb 100644
+--- a/android/app/src/main/kotlin/com/follow/clash/MainActivity.kt
++++ b/android/app/src/main/kotlin/com/follow/clash/MainActivity.kt
+@@ -8,17 +8,9 @@ import io.flutter.embedding.android.FlutterActivity
+ import io.flutter.embedding.engine.FlutterEngine
+ 
+ class MainActivity : FlutterActivity() {
++    override fun provideFlutterEngine(context: android.content.Context): FlutterEngine = EmbeddedEngine.get(context)
++    override fun shouldDestroyEngineWithHost(): Boolean = false
+     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+-        super.configureFlutterEngine(flutterEngine)
+-        flutterEngine.plugins.add(AppPlugin())
+-        flutterEngine.plugins.add(BatteryPlugin())
+-        flutterEngine.plugins.add(ServicePlugin())
+-        flutterEngine.plugins.add(TilePlugin())
+-        ServiceState.attachFlutterEngine(flutterEngine)
+-    }
+-
+-    override fun onDestroy() {
+-        flutterEngine?.let(ServiceState::detachFlutterEngine)
+-        super.onDestroy()
++        // Plugins and service ownership belong to EmbeddedEngine, not this Activity.
+     }
+ }
+diff --git a/android/app/src/main/kotlin/com/follow/clash/ServiceState.kt b/android/app/src/main/kotlin/com/follow/clash/ServiceState.kt
+index 28c4560..193e5e2 100644
+--- a/android/app/src/main/kotlin/com/follow/clash/ServiceState.kt
++++ b/android/app/src/main/kotlin/com/follow/clash/ServiceState.kt
+@@ -28,7 +28,7 @@ object ServiceState {
+ 
+     suspend fun awaitRunTime(): Long = machine.awaitRunTime()
+ 
+-    fun requestStart(): Deferred<Boolean> = machine.requestStart()
++    fun requestStart(permitted: () -> Boolean = { true }): Deferred<Boolean> = machine.requestStart(permitted)
+ 
+     fun requestStop(): Deferred<Boolean> = machine.requestStop()
+ 
+diff --git a/android/app/src/main/kotlin/com/follow/clash/ServiceStateHost.kt b/android/app/src/main/kotlin/com/follow/clash/ServiceStateHost.kt
+index 7239248..9493323 100644
+--- a/android/app/src/main/kotlin/com/follow/clash/ServiceStateHost.kt
++++ b/android/app/src/main/kotlin/com/follow/clash/ServiceStateHost.kt
+@@ -81,7 +81,7 @@ internal object AndroidServiceStateHost : ServiceStateHost {
+         get() = ServiceController.runtime
+ 
+     override val homeDirPath: String
+-        get() = GlobalState.application.filesDir.path
++        get() = java.io.File(GlobalState.application.filesDir, "flclash").apply { mkdirs() }.path
+ 
+     override val sdkInt: Int
+         get() = android.os.Build.VERSION.SDK_INT
+diff --git a/android/app/src/main/kotlin/com/follow/clash/ServiceStateMachine.kt b/android/app/src/main/kotlin/com/follow/clash/ServiceStateMachine.kt
+index 840a394..3ef1124 100644
+--- a/android/app/src/main/kotlin/com/follow/clash/ServiceStateMachine.kt
++++ b/android/app/src/main/kotlin/com/follow/clash/ServiceStateMachine.kt
+@@ -120,11 +120,12 @@ internal class ServiceStateMachine(private val host: ServiceStateHost) {
+         handleStopAction()
+     }
+ 
+-    fun requestStart(): Deferred<Boolean> {
++    fun requestStart(permitted: () -> Boolean = { true }): Deferred<Boolean> {
++        if (!permitted()) return CompletableDeferred(false)
+         if (isStartedAs(sharedState.vpnOptions)) {
+             return CompletableDeferred(true)
+         }
+-        val outcome = launchStart(createRequest(running = true))
++        val outcome = launchStart(createRequest(running = true), permitted)
+         return host.scope.async { outcome.await() == StartOutcome.STARTED }
+     }
+ 
+@@ -159,11 +160,11 @@ internal class ServiceStateMachine(private val host: ServiceStateHost) {
+         }
+     }
+ 
+-    private fun launchStart(request: RunRequest): Deferred<StartOutcome> {
++    private fun launchStart(request: RunRequest, authorized: () -> Boolean = { true }): Deferred<StartOutcome> {
+         val result = CompletableDeferred<StartOutcome>()
+         val launch: (Boolean) -> Unit = { permitted ->
+             host.scope.launch {
+-                result.complete(if (permitted) start(request) else abandon(request))
++                result.complete(if (permitted) start(request, authorized) else abandon(request))
+             }
+         }
+         val app = host.app()
+@@ -213,9 +214,9 @@ internal class ServiceStateMachine(private val host: ServiceStateHost) {
+         host.showToast(message?.takeIf { it.isNotBlank() } ?: INVALID_CONFIG_MESSAGE)
+     }
+ 
+-    private suspend fun start(request: RunRequest): StartOutcome {
++    private suspend fun start(request: RunRequest, authorized: () -> Boolean): StartOutcome {
+         val started = try {
+-            startPreparationLock.withLock { runStart(request) }
++            startPreparationLock.withLock { runStart(request, authorized) }
+         } catch (error: CancellationException) {
+             throw error
+         } catch (error: Exception) {
+@@ -235,8 +236,8 @@ internal class ServiceStateMachine(private val host: ServiceStateHost) {
+         return StartOutcome.FAILED
+     }
+ 
+-    private suspend fun runStart(request: RunRequest): Boolean {
+-        if (!isCurrent(request)) {
++    private suspend fun runStart(request: RunRequest, authorized: () -> Boolean): Boolean {
++        if (!isCurrent(request) || !authorized()) {
+             return false
+         }
+         val options = sharedState.vpnOptions ?: return false
+@@ -248,7 +249,7 @@ internal class ServiceStateMachine(private val host: ServiceStateHost) {
+         }
+         return transitionLock.withLock {
+             when {
+-                !isCurrent(request) -> false
++                !isCurrent(request) || !authorized() -> false
+                 host.runtime?.vpn == options.enable -> true
+                 else -> transitioning(RunState.STARTING) {
+                     host.startService(withLocalNetworkFallback(options)) && isCurrent(request)
+diff --git a/android/app/src/main/kotlin/com/follow/clash/plugins/AppPlugin.kt b/android/app/src/main/kotlin/com/follow/clash/plugins/AppPlugin.kt
+index 7d30952..1aa0fe6 100644
+--- a/android/app/src/main/kotlin/com/follow/clash/plugins/AppPlugin.kt
++++ b/android/app/src/main/kotlin/com/follow/clash/plugins/AppPlugin.kt
+@@ -185,7 +185,9 @@ class AppPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, ActivityAware
+     override fun onMethodCall(call: MethodCall, result: Result) {
+         when (call.method) {
+             "moveTaskToBack" -> {
+-                activity?.moveTaskToBack(true)
++                // When embedded, the previous Activity is the DSHA conversation.
++                if (activity?.isTaskRoot == false) activity?.finish()
++                else activity?.moveTaskToBack(true)
+                 result.success(true)
+             }
+ 
+@@ -809,7 +811,6 @@ class AppPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, ActivityAware
+     }
+ 
+     override fun onDetachedFromActivity() {
+-        channel.invokeMethod("exit", null)
+         detachFromActivity()
+         invokeVpnPrepareCallback(false)
+         invokeRequestNotificationCallback(false)
+diff --git a/android/app/src/main/kotlin/com/follow/clash/plugins/ServicePlugin.kt b/android/app/src/main/kotlin/com/follow/clash/plugins/ServicePlugin.kt
+index ef7c639..4b99040 100644
+--- a/android/app/src/main/kotlin/com/follow/clash/plugins/ServicePlugin.kt
++++ b/android/app/src/main/kotlin/com/follow/clash/plugins/ServicePlugin.kt
+@@ -38,12 +38,13 @@ class ServicePlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
+         channel = MethodChannel(messenger, SERVICE_CHANNEL)
+         channel.setMethodCallHandler(this)
+         // Serial: watchRoute keeps the latest intent by the order calls reach the Core.
+-        coreChannel = MethodChannel(
+-            messenger,
+-            CORE_CHANNEL,
+-            StandardMethodCodec.INSTANCE,
+-            messenger.makeBackgroundTaskQueue(),
+-        )
++        coreChannel =
++            MethodChannel(
++                messenger,
++                CORE_CHANNEL,
++                StandardMethodCodec.INSTANCE,
++                messenger.makeBackgroundTaskQueue(),
++            )
+         coreChannel.setMethodCallHandler(::onCoreMethodCall)
+     }
+ 
+@@ -91,11 +92,17 @@ class ServicePlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
+             result.error("INVALID_ARGUMENT", "Method call payload must be a string", null)
+             return
+         }
+-        ServiceController.invokeMethod(data) { response ->
+-            result.success(response)
+-        }.onFailure { error ->
+-            result.error("CORE_ERROR", error.message, null)
++        val requestId = runCatching {
++            org.json.JSONObject(data).optString("_dshaRequestId")
+         }
++            .getOrDefault("")
++        if (!authorize(requestId, result)) return
++        ServiceController.invokeMethod(data) { response ->
++                result.success(response)
++            }
++            .onFailure { error ->
++                result.error("CORE_ERROR", error.message, null)
++            }
+     }
+ 
+     private fun getRunTime(result: MethodChannel.Result) {
+@@ -109,7 +116,8 @@ class ServicePlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
+         scope.launch {
+             val state = runCatching {
+                 gson.fromJson(data, SharedState::class.java)
+-            }.getOrNull()
++            }
++                .getOrNull()
+             if (state == null) {
+                 result.success("Invalid shared state")
+                 return@launch
+@@ -120,18 +128,65 @@ class ServicePlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
+     }
+ 
+     private fun start(call: MethodCall, result: MethodChannel.Result) {
+-        commandRevision = call.arguments as? Int ?: commandRevision
+-        ServiceState.requestStart()
+-        result.success(true)
++        if (!acceptCommand(call, result)) return
++        val requestId = (call.arguments as? Map<*, *>)?.get("requestId") as? String
++        val started = ServiceState.requestStart {
++            requestId.isNullOrEmpty() ||
++                runCatching {
++                    com.follow.clash.EmbeddedEngine.authorize(requestId)
++                }
++                    .isSuccess
++        }
++        scope.launch(Dispatchers.Main) {
++            try {
++                val completed = started.await()
++                if (!authorize(requestId.orEmpty(), result)) return@launch
++                if (completed) result.success(true)
++                else
++                    result.error(
++                        "SERVICE_START_FAILED",
++                        "代理启动被中断或服务未能创建，请检查 FlClash 的配置与 VPN 授权",
++                        null,
++                    )
++            } catch (cancel: kotlinx.coroutines.CancellationException) {
++                throw cancel
++            } catch (error: Exception) {
++                result.error("SERVICE_START_FAILED", error.message, null)
++            }
++        }
+     }
+ 
+     private fun stop(call: MethodCall, result: MethodChannel.Result) {
+-        commandRevision = call.arguments as? Int ?: commandRevision
+-        ServiceState.requestStop()
+-        result.success(true)
++        if (!acceptCommand(call, result)) return
++        val stopped = ServiceState.requestStop()
++        scope.launch(Dispatchers.Main) {
++            try {
++                result.success(stopped.await())
++            } catch (cancel: kotlinx.coroutines.CancellationException) {
++                throw cancel
++            } catch (error: Exception) {
++                result.error("SERVICE_STOP_FAILED", error.message, null)
++            }
++        }
++    }
++
++    private fun acceptCommand(call: MethodCall, result: MethodChannel.Result): Boolean {
++        val envelope = call.arguments as? Map<*, *>
++        if (!authorize(envelope?.get("requestId") as? String ?: "", result)) return false
++        commandRevision =
++            (envelope?.get("revision") as? Int) ?: (call.arguments as? Int) ?: commandRevision
++        return true
++    }
++
++    private fun authorize(requestId: String, result: MethodChannel.Result): Boolean {
++        if (requestId.isEmpty()) return true
++        return runCatching { com.follow.clash.EmbeddedEngine.authorize(requestId) }
++            .onFailure { result.error("AGENT_PERMISSION", it.message, null) }
++            .isSuccess
+     }
+ 
+-    // Read on the platform thread, where start and stop arrive: revision and intent are one instant.
++    // Read on the platform thread, where start and stop arrive: revision and intent are one
++    // instant.
+     fun notifyStopped() {
+         scope.launch(Dispatchers.Main) {
+             if (!ServiceState.isRunRequested) {
+diff --git a/android/common/src/main/java/com/follow/clash/common/GlobalState.kt b/android/common/src/main/java/com/follow/clash/common/GlobalState.kt
+index 318b6ee..b8a3f59 100644
+--- a/android/common/src/main/java/com/follow/clash/common/GlobalState.kt
++++ b/android/common/src/main/java/com/follow/clash/common/GlobalState.kt
+@@ -10,7 +10,7 @@ import kotlinx.coroutines.SupervisorJob
+ 
+ object GlobalState : CoroutineScope by CoroutineScope(SupervisorJob() + Dispatchers.Default) {
+     const val NOTIFICATION_CHANNEL = "FlClash"
+-    const val NOTIFICATION_ID = 1
++    const val NOTIFICATION_ID = 4150
+     private const val ANY_PID = 0
+     private const val EVERY_EXIT_RECORD = 0
+ 
+diff --git a/android/service/src/main/java/com/follow/clash/service/FilesProvider.kt b/android/service/src/main/java/com/follow/clash/service/FilesProvider.kt
+index f2e8b3d..05b0448 100644
+--- a/android/service/src/main/java/com/follow/clash/service/FilesProvider.kt
++++ b/android/service/src/main/java/com/follow/clash/service/FilesProvider.kt
+@@ -91,7 +91,7 @@ class FilesProvider : DocumentsProvider() {
+     }
+ 
+     private fun resolveFile(documentId: String): File {
+-        val root = context?.filesDir?.canonicalFile
++        val root = context?.filesDir?.let { File(it, "flclash").apply { mkdirs() }.canonicalFile }
+             ?: throw FileNotFoundException("App files directory is unavailable")
+         val file = try {
+             if (documentId == ROOT_DOCUMENT_ID) root else File(documentId).canonicalFile
+diff --git a/android/tests/app/ServiceStateMachineTest.kt b/android/tests/app/ServiceStateMachineTest.kt
+index 43d3d33..e522bac 100644
+--- a/android/tests/app/ServiceStateMachineTest.kt
++++ b/android/tests/app/ServiceStateMachineTest.kt
+@@ -171,6 +171,24 @@ private class FakeHost(override val scope: CoroutineScope) : ServiceStateHost {
+ @OptIn(ExperimentalCoroutinesApi::class)
+ class ServiceStateMachineTest {
+ 
++    @Test
++    fun `revoking Agent permission while VPN consent is pending prevents start`() = runTest {
++        var permitted = true
++        val host = FakeHost(backgroundScope).apply {
++            vpnPermissionGranted = false
++            app = FakeApp().apply { beforeVpnPrepared = { permitted = false } }
++        }
++        val machine = ServiceStateMachine(host)
++        machine.syncSharedState(configuredState())
++
++        assertFalse(machine.requestStart { permitted }.await())
++        assertEquals(0, host.startCalls)
++        assertFalse(machine.isRunRequested)
++        // The denied Agent request must not block a later manual start.
++        assertTrue(machine.requestStart().await())
++        assertEquals(1, host.startCalls)
++    }
++
+     @Test
+     fun `initParams spells the keys the Go wrapper expects`() {
+         val json = ServiceStateMachine.initParams("/files", 34)
+diff --git a/arb/intl_en.arb b/arb/intl_en.arb
+index cbda0e3..9438dcd 100644
+--- a/arb/intl_en.arb
++++ b/arb/intl_en.arb
+@@ -1076,5 +1076,15 @@
+   "fakeipFilterDesc": "These domains get real IPs instead of Fake-IPs. In whitelist mode, only they get Fake-IPs.",
+   "fallbackFilterGeositeDesc": "Domains in these GeoSite categories are resolved by Fallback directly.",
+   "fallbackFilterIpcidrDesc": "When Nameserver returns an IP in these ranges, the Fallback answer is used.",
+-  "fallbackFilterDomainDesc": "These domains are resolved by Fallback directly."
++  "fallbackFilterDomainDesc": "These domains are resolved by Fallback directly.",
++  "dshaAgentBehavior": "Agent behavior",
++  "dshaAllowStart": "Allow Agent to start and stop the proxy",
++  "dshaAllowNodes": "Allow Agent to switch nodes",
++  "dshaAllowRules": "Allow Agent to edit rules",
++  "dshaAgentExplanation": "These permissions apply only to the built-in DSHA Agent. Manual controls remain available. Revoking a permission blocks subsequent Agent actions.",
++  "dshaOpenFirst": "Open built-in FlClash and complete initialization first.",
++  "dshaProfileRequired": "Import and select a profile first.",
++  "dshaOperationFailed": "The operation did not complete. Check FlClash and try again.",
++  "dshaInvalidSelection": "The proxy group or node is unavailable.",
++  "dshaInvalidRule": "The proxy rule is invalid."
+ }
+diff --git a/arb/intl_es.arb b/arb/intl_es.arb
+index 417db6b..4a03669 100644
+--- a/arb/intl_es.arb
++++ b/arb/intl_es.arb
+@@ -1076,5 +1076,15 @@
+   "fakeipFilterDesc": "Estos dominios reciben su IP real en lugar de una Fake-IP. En modo whitelist, solo ellos reciben Fake-IP.",
+   "fallbackFilterGeositeDesc": "Los dominios de estas categorías GeoSite se resuelven directamente con Fallback.",
+   "fallbackFilterIpcidrDesc": "Si Nameserver devuelve una IP de estos rangos, se usa la respuesta de Fallback.",
+-  "fallbackFilterDomainDesc": "Estos dominios se resuelven directamente con Fallback."
++  "fallbackFilterDomainDesc": "Estos dominios se resuelven directamente con Fallback.",
++  "dshaAgentBehavior": "Comportamiento del Agent",
++  "dshaAllowStart": "Permitir al Agent iniciar y detener el proxy",
++  "dshaAllowNodes": "Permitir al Agent cambiar de nodo",
++  "dshaAllowRules": "Permitir al Agent editar reglas",
++  "dshaAgentExplanation": "Estos permisos solo se aplican al Agent integrado en DSHA. Los controles manuales siguen disponibles. Revocar un permiso bloquea las acciones posteriores del Agent.",
++  "dshaOpenFirst": "Abra FlClash integrado y complete la inicialización.",
++  "dshaProfileRequired": "Importe y seleccione un perfil primero.",
++  "dshaOperationFailed": "La operación no se completó. Revise FlClash e inténtelo de nuevo.",
++  "dshaInvalidSelection": "El grupo de proxies o el nodo seleccionado no está disponible.",
++  "dshaInvalidRule": "La regla de proxy no es válida."
+ }
+diff --git a/arb/intl_fr.arb b/arb/intl_fr.arb
+index aa4e778..ed4b915 100644
+--- a/arb/intl_fr.arb
++++ b/arb/intl_fr.arb
+@@ -1076,5 +1076,15 @@
+   "fakeipFilterDesc": "Ces domaines reçoivent leur vraie IP au lieu d’une Fake-IP. En mode whitelist, eux seuls reçoivent une Fake-IP.",
+   "fallbackFilterGeositeDesc": "Les domaines de ces catégories GeoSite sont résolus directement par Fallback.",
+   "fallbackFilterIpcidrDesc": "Si Nameserver renvoie une IP de ces plages, la réponse de Fallback est utilisée.",
+-  "fallbackFilterDomainDesc": "Ces domaines sont résolus directement par Fallback."
++  "fallbackFilterDomainDesc": "Ces domaines sont résolus directement par Fallback.",
++  "dshaAgentBehavior": "Comportement de l’Agent",
++  "dshaAllowStart": "Autoriser l’Agent à démarrer et arrêter le proxy",
++  "dshaAllowNodes": "Autoriser l’Agent à changer de nœud",
++  "dshaAllowRules": "Autoriser l’Agent à modifier les règles",
++  "dshaAgentExplanation": "Ces autorisations concernent uniquement l’Agent intégré à DSHA. Les commandes manuelles restent disponibles. La révocation bloque les actions ultérieures de l’Agent.",
++  "dshaOpenFirst": "Ouvrez FlClash intégré et terminez son initialisation.",
++  "dshaProfileRequired": "Importez et sélectionnez d’abord un profil.",
++  "dshaOperationFailed": "L’opération n’a pas abouti. Vérifiez FlClash et réessayez.",
++  "dshaInvalidSelection": "Le groupe de proxys ou le nœud choisi est indisponible.",
++  "dshaInvalidRule": "La règle de proxy est invalide."
+ }
+diff --git a/arb/intl_ja.arb b/arb/intl_ja.arb
+index d6ff2b3..7e689d7 100644
+--- a/arb/intl_ja.arb
++++ b/arb/intl_ja.arb
+@@ -1076,5 +1076,15 @@
+   "fakeipFilterDesc": "これらのドメインには Fake-IP ではなく実際の IP を返します。whitelist モードでは、これらだけが Fake-IP を使います。",
+   "fallbackFilterGeositeDesc": "これらの GeoSite カテゴリのドメインは、直接 Fallback で解決します。",
+   "fallbackFilterIpcidrDesc": "Nameserver がこれらの範囲の IP を返したときは、Fallback の結果を使います。",
+-  "fallbackFilterDomainDesc": "これらのドメインは、直接 Fallback で解決します。"
++  "fallbackFilterDomainDesc": "これらのドメインは、直接 Fallback で解決します。",
++  "dshaAgentBehavior": "Agent の動作",
++  "dshaAllowStart": "Agent にプロキシの開始と停止を許可",
++  "dshaAllowNodes": "Agent にノードの切り替えを許可",
++  "dshaAllowRules": "Agent にルールの編集を許可",
++  "dshaAgentExplanation": "これらの権限は DSHA 内蔵 Agent にのみ適用されます。手動操作には影響しません。権限を取り消すと、その後の Agent の操作を拒否します。",
++  "dshaOpenFirst": "内蔵 FlClash を開き、初期設定を完了してください。",
++  "dshaProfileRequired": "設定をインポートして選択してください。",
++  "dshaOperationFailed": "操作が完了しませんでした。FlClash を確認して再試行してください。",
++  "dshaInvalidSelection": "選択したプロキシグループまたはノードは利用できません。",
++  "dshaInvalidRule": "プロキシルールが無効です。"
+ }
+diff --git a/arb/intl_ko.arb b/arb/intl_ko.arb
+index ead8d29..0136093 100644
+--- a/arb/intl_ko.arb
++++ b/arb/intl_ko.arb
+@@ -1076,5 +1076,15 @@
+   "fakeipFilterDesc": "이 도메인에는 Fake-IP 대신 실제 IP를 반환합니다. whitelist 모드에서는 이 도메인만 Fake-IP를 사용합니다.",
+   "fallbackFilterGeositeDesc": "이 GeoSite 분류의 도메인은 바로 Fallback으로 확인합니다.",
+   "fallbackFilterIpcidrDesc": "Nameserver가 이 범위의 IP를 반환하면 Fallback 결과를 사용합니다.",
+-  "fallbackFilterDomainDesc": "이 도메인은 바로 Fallback으로 확인합니다."
++  "fallbackFilterDomainDesc": "이 도메인은 바로 Fallback으로 확인합니다.",
++  "dshaAgentBehavior": "Agent 동작",
++  "dshaAllowStart": "Agent의 프록시 시작 및 중지 허용",
++  "dshaAllowNodes": "Agent의 노드 전환 허용",
++  "dshaAllowRules": "Agent의 규칙 수정 허용",
++  "dshaAgentExplanation": "이 권한은 DSHA 내장 Agent에만 적용됩니다. 수동 조작은 계속 사용할 수 있습니다. 권한을 끄면 이후 Agent 작업이 차단됩니다.",
++  "dshaOpenFirst": "내장 FlClash를 열고 초기 설정을 완료하세요.",
++  "dshaProfileRequired": "먼저 프로필을 가져와 선택하세요.",
++  "dshaOperationFailed": "작업을 완료하지 못했습니다. FlClash를 확인하고 다시 시도하세요.",
++  "dshaInvalidSelection": "선택한 프록시 그룹 또는 노드를 사용할 수 없습니다.",
++  "dshaInvalidRule": "프록시 규칙이 잘못되었습니다."
+ }
+diff --git a/arb/intl_ru.arb b/arb/intl_ru.arb
+index 58e77e7..4c3540d 100644
+--- a/arb/intl_ru.arb
++++ b/arb/intl_ru.arb
+@@ -1076,5 +1076,15 @@
+   "fakeipFilterDesc": "Эти домены получают реальные IP вместо Fake-IP. В режиме whitelist Fake-IP получают только они.",
+   "fallbackFilterGeositeDesc": "Домены из этих категорий GeoSite сразу разрешаются через Fallback.",
+   "fallbackFilterIpcidrDesc": "Если Nameserver возвращает IP из этих диапазонов, используется ответ Fallback.",
+-  "fallbackFilterDomainDesc": "Эти домены сразу разрешаются через Fallback."
++  "fallbackFilterDomainDesc": "Эти домены сразу разрешаются через Fallback.",
++  "dshaAgentBehavior": "Действия Agent",
++  "dshaAllowStart": "Разрешить Agent запускать и останавливать прокси",
++  "dshaAllowNodes": "Разрешить Agent переключать узлы",
++  "dshaAllowRules": "Разрешить Agent изменять правила",
++  "dshaAgentExplanation": "Разрешения относятся только к встроенному Agent DSHA. Ручное управление остаётся доступным. Отзыв разрешения блокирует последующие действия Agent.",
++  "dshaOpenFirst": "Откройте встроенный FlClash и завершите инициализацию.",
++  "dshaProfileRequired": "Сначала импортируйте и выберите профиль.",
++  "dshaOperationFailed": "Операция не завершена. Проверьте FlClash и повторите попытку.",
++  "dshaInvalidSelection": "Выбранная группа прокси или узел недоступны.",
++  "dshaInvalidRule": "Недопустимое правило прокси."
+ }
+diff --git a/arb/intl_zh_CN.arb b/arb/intl_zh_CN.arb
+index b44010c..9a035c8 100644
+--- a/arb/intl_zh_CN.arb
++++ b/arb/intl_zh_CN.arb
+@@ -1076,5 +1076,15 @@
+   "fakeipFilterDesc": "这些域名不使用 Fake-IP，返回真实 IP；过滤模式为 whitelist 时则只有它们使用 Fake-IP。",
+   "fallbackFilterGeositeDesc": "属于这些 GeoSite 分类的域名直接使用 Fallback 解析。",
+   "fallbackFilterIpcidrDesc": "Nameserver 返回这些网段内的 IP 时，改用 Fallback 的结果。",
+-  "fallbackFilterDomainDesc": "这些域名直接使用 Fallback 解析。"
++  "fallbackFilterDomainDesc": "这些域名直接使用 Fallback 解析。",
++  "dshaAgentBehavior": "Agent 行为",
++  "dshaAllowStart": "允许 Agent 启停代理",
++  "dshaAllowNodes": "允许 Agent 切换节点",
++  "dshaAllowRules": "允许 Agent 修改规则",
++  "dshaAgentExplanation": "这些权限仅适用于 DSHA 内置 Agent，不影响手动操作。关闭权限后会阻止后续 Agent 操作。",
++  "dshaOpenFirst": "请先打开内置 FlClash 并完成初始化。",
++  "dshaProfileRequired": "请先导入并选择配置。",
++  "dshaOperationFailed": "操作未完成，请检查 FlClash 后重试。",
++  "dshaInvalidSelection": "所选代理组或节点不可用。",
++  "dshaInvalidRule": "代理规则无效。"
+ }
+diff --git a/lib/bootstrap.dart b/lib/bootstrap.dart
+index 0479adb..4700c22 100644
+--- a/lib/bootstrap.dart
++++ b/lib/bootstrap.dart
+@@ -88,6 +88,16 @@ class Bootstrap {
+   ) async {
+     await _claimDataDirectory();
+     globalState.packageInfo = await PackageInfo.fromPlatform();
++    if (const bool.fromEnvironment('DSHA_EMBEDDED')) {
++      final hostInfo = globalState.packageInfo;
++      globalState.packageInfo = PackageInfo(
++        appName: appName,
++        packageName: hostInfo.packageName,
++        version: const String.fromEnvironment('FLCLASH_VERSION'),
++        buildNumber: const String.fromEnvironment('FLCLASH_BUILD_NUMBER'),
++        buildSignature: hostInfo.buildSignature,
++      );
++    }
+     var config = await migration.run();
+     _bootDecision = await bootGuard.evaluate(
+       profileId: config.currentProfileId,
+diff --git a/lib/common/app_update.dart b/lib/common/app_update.dart
+index ead1b77..4aad539 100644
+--- a/lib/common/app_update.dart
++++ b/lib/common/app_update.dart
+@@ -40,7 +40,11 @@ String? Function() resolveSelfUpdateSuffix = () => selfUpdateAssetSuffix(
+   windowsInstalled: system.isWindows && isInstalledWindowsBuild,
+ );
+ 
+-String? get selfUpdateSuffix => resolveSelfUpdateSuffix();
++// An embedded component cannot replace its host with the standalone FlClash APK.
++// Keep release discovery and the original release-page fallback available.
++String? get selfUpdateSuffix => const bool.fromEnvironment('DSHA_EMBEDDED')
++    ? null
++    : resolveSelfUpdateSuffix();
+ 
+ // The names follow the release matrix in .github/workflows/build.yaml.
+ String? selfUpdateAssetSuffix(Abi abi, {required bool windowsInstalled}) {
+diff --git a/lib/common/dsha_agent.dart b/lib/common/dsha_agent.dart
+new file mode 100644
+index 0000000..e4ac8a1
+--- /dev/null
++++ b/lib/common/dsha_agent.dart
+@@ -0,0 +1,249 @@
++import 'dart:async';
++import 'dart:convert';
++
++import 'package:fl_clash/common/common.dart';
++import 'package:fl_clash/common/dsha_agent_scope.dart';
++import 'package:fl_clash/database/database.dart';
++import 'package:fl_clash/models/models.dart';
++import 'package:fl_clash/providers/providers.dart';
++import 'package:fl_clash/plugins/service.dart';
++import 'package:flutter/services.dart';
++import 'package:flutter_riverpod/flutter_riverpod.dart';
++
++const dshaEmbedded = bool.fromEnvironment('DSHA_EMBEDDED');
++const dshaAgentChannel = MethodChannel('dev.deepseek.mobile/flclash_agent');
++
++Future<void> prepareDshaHost() async {
++  AppPath.useEmbeddedStorage();
++  await dshaAgentChannel.invokeMethod<void>('bootstrap');
++}
++
++class DshaAgentBridge {
++  DshaAgentBridge(this.container);
++  final ProviderContainer container;
++  Future<void>? _migration;
++  int _routeRevision = 0;
++
++  void attach() {
++    container.listen(proxyStateProvider, (_, state) {
++      unawaited(
++        dshaAgentChannel.invokeMethod<void>('route', {
++          'revision': ++_routeRevision,
++          'running': state.isStart,
++          'port': state.port,
++        }),
++      );
++    }, fireImmediately: true);
++    container.listen(initProvider, (_, initialized) {
++      if (initialized) {
++        _migration ??= _migrateProfiles();
++        unawaited(
++          _migration!.catchError((Object error) {
++            commonPrint.log(
++              'DSHA profile migration failed: ${error.runtimeType}',
++            );
++          }),
++        );
++      }
++    }, fireImmediately: true);
++    dshaAgentChannel.setMethodCallHandler((call) async {
++      if (call.method != 'command') throw MissingPluginException();
++      final args = jsonDecode(call.arguments as String) as Map<String, dynamic>;
++      for (
++        var attempt = 0;
++        !container.read(initProvider) && attempt < 100;
++        attempt++
++      ) {
++        await _check(args);
++        await Future<void>.delayed(const Duration(milliseconds: 100));
++      }
++      if (!container.read(initProvider)) {
++        throw PlatformException(
++          code: 'initialize',
++          message: currentAppLocalizations.dshaOpenFirst,
++        );
++      }
++      await _migration;
++      return withDshaRequest(
++        args['requestId'] as String,
++        () async => jsonEncode(await _command(args)),
++      );
++    });
++    unawaited(dshaAgentChannel.invokeMethod<void>('ready'));
++  }
++
++  Future<void> _check(Map<String, dynamic> args) async {
++    await dshaAgentChannel.invokeMethod<bool>('check', args['requestId']);
++  }
++
++  Future<Map<String, Object?>> _command(Map<String, dynamic> args) async {
++    await _check(args);
++    final action = args['action'] as String;
++    final setup = container.read(setupActionProvider.notifier);
++    final core = container.read(coreHandlerProvider);
++    switch (action) {
++      case 'status':
++        final data = await core.getProxies();
++        final permissions = jsonDecode(
++          (await dshaAgentChannel.invokeMethod<String>('policy'))!,
++        );
++        return {
++          'running': await service?.getRunTime() != null,
++          'mode': container.read(patchClashConfigProvider).mode.name,
++          'hasProfile': container.read(currentProfileProvider) != null,
++          'canStart': permissions['start'],
++          'canSelectNode': permissions['nodes'],
++          'canEditRules': permissions['rules'],
++          'groups': [
++            for (final entry
++                in data.proxies.entries
++                    .where((e) => e.value is Map && e.value['all'] is List)
++                    .take(30))
++              {
++                'name': entry.key,
++                'type': entry.value['type'],
++                'now': entry.value['now'],
++                'nodes': (entry.value['all'] as List).take(60).toList(),
++              },
++          ],
++        };
++      case 'start':
++      case 'stop':
++        final running = action == 'start';
++        if (running && container.read(currentProfileProvider) == null) {
++          throw MessageException(currentAppLocalizations.dshaProfileRequired);
++        }
++        if (running) {
++          if (container.read(safeModeProvider)) {
++            throw const MessageException('FlClash 处于安全模式，请退出安全模式后重试');
++          }
++          if (container.read(suspendProvider)) {
++            throw const MessageException('当前网络在 FlClash 的暂停列表中，请调整网络设置后重试');
++          }
++          final vpn = await container.read(vpnOptionsProvider.future);
++          await dshaAgentChannel.invokeMethod<bool>('prepareStart', {
++            'requestId': args['requestId'],
++            'vpn': vpn.enable,
++          });
++          await _check(args);
++          // The Flutter activity may be detached: synchronize the current VPN options now,
++          // instead of relying on the UI listener's unawaited shared-state update.
++          final syncError = await service?.syncState(
++            container.read(sharedStateProvider),
++          );
++          if (syncError == null || syncError.isNotEmpty) {
++            throw const MessageException('FlClash 服务未就绪，请打开 FlClash 完成初始化');
++          }
++          if (!await setup.applyProfile(silence: true)) {
++            throw const MessageException('当前代理配置未能加载，请在 FlClash 检查配置');
++          }
++        }
++        await _check(args);
++        if (!await setup.setRunning(running)) {
++          throw MessageException(currentAppLocalizations.dshaOperationFailed);
++        }
++        for (var attempt = 0; attempt < 100; attempt++) {
++          await _check(args);
++          if ((await service?.getRunTime() != null) == running) {
++            return {'running': running};
++          }
++          await Future<void>.delayed(const Duration(milliseconds: 100));
++        }
++        throw MessageException(
++          running ? '代理未进入运行状态，请检查 FlClash 日志中的启动错误' : '代理未停止，可能已有新的启动请求',
++        );
++      case 'select':
++        final group = args['group'] as String;
++        final node = args['node'] as String;
++        final before = (await core.getProxies()).proxies[group];
++        if (before is! Map ||
++            before['all'] is! List ||
++            !(before['all'] as List).contains(node)) {
++          throw MessageException(currentAppLocalizations.dshaInvalidSelection);
++        }
++        await _check(args);
++        await container
++            .read(proxiesActionProvider.notifier)
++            .changeProxy(groupName: group, proxyName: node);
++        final after = (await core.getProxies()).proxies[group];
++        if (after is! Map || after['now'] != node) {
++          throw MessageException(currentAppLocalizations.dshaOperationFailed);
++        }
++        return {'group': group, 'node': node};
++      case 'rule':
++        final profileId = container.read(currentProfileIdProvider);
++        if (profileId == null) {
++          throw MessageException(currentAppLocalizations.dshaProfileRequired);
++        }
++        final type = (args['type'] as String? ?? 'DOMAIN-SUFFIX').toUpperCase();
++        final domain = args['domain'] as String;
++        final target = args['target'] as String;
++        if (!{'DOMAIN', 'DOMAIN-SUFFIX', 'DOMAIN-KEYWORD'}.contains(type) ||
++            domain.isEmpty ||
++            domain.length > 253 ||
++            RegExp(r'[\s,\x00-\x1f]').hasMatch(domain) ||
++            target.isEmpty ||
++            RegExp(r'[\r\n,]').hasMatch(target)) {
++          throw MessageException(currentAppLocalizations.dshaInvalidRule);
++        }
++        final proxies = (await core.getProxies()).proxies;
++        if (!{'DIRECT', 'REJECT'}.contains(target) &&
++            !proxies.containsKey(target)) {
++          throw MessageException(currentAppLocalizations.dshaInvalidSelection);
++        }
++        final existing = await database.rulesDao
++            .queryProfileRules(profileId)
++            .get();
++        final rule = Rule.parse('$type,$domain,$target');
++        if (existing.any(
++          (r) =>
++              r.ruleAction == rule.ruleAction &&
++              r.content == rule.content &&
++              r.ruleTarget == target,
++        )) {
++          return {'saved': true, 'alreadyPresent': true};
++        }
++        await _check(args);
++        await database.rulesDao.putRule(rule, profileId: profileId);
++        await _check(args);
++        final applied = await setup.applyProfile(force: true, silence: true);
++        return {'saved': true, 'applied': applied, 'profileId': profileId};
++      default:
++        throw ArgumentError('Unknown proxy action');
++    }
++  }
++
++  Future<void> _migrateProfiles() async {
++    final raw = await dshaAgentChannel.invokeMethod<String>('legacyProfiles');
++    final rows = jsonDecode(raw ?? '[]') as List;
++    final core = container.read(coreHandlerProvider);
++    for (final row in rows.cast<Map<String, dynamic>>()) {
++      final legacyId = row['id'] as String;
++      final id = int.parse(
++        legacyId.replaceAll('-', '').substring(0, 13),
++        radix: 16,
++      );
++      var profile = await database.profilesDao.get(id);
++      if (profile == null) {
++        profile =
++            Profile.normal(
++              label: row['name'] as String,
++              url: row['source'] as String,
++            ).copyWith(
++              id: id,
++              selectedMap: Map<String, String>.from(row['nodes'] as Map),
++            );
++        profile = await profile.saveFile(
++          Uint8List.fromList(utf8.encode(row['yaml'] as String)),
++          validate: (path, key) => core.validateProfile(path, key),
++        );
++        await database.profilesDao.putAll([profile.toCompanion()]);
++      }
++      container.read(profilesActionProvider.notifier).putProfile(profile);
++      if (row['selected'] == true) {
++        container.read(currentProfileIdProvider.notifier).value = id;
++      }
++      await dshaAgentChannel.invokeMethod<void>('migrated', legacyId);
++    }
++  }
++}
+diff --git a/lib/common/dsha_agent_scope.dart b/lib/common/dsha_agent_scope.dart
+new file mode 100644
+index 0000000..acc99fd
+--- /dev/null
++++ b/lib/common/dsha_agent_scope.dart
+@@ -0,0 +1,15 @@
++import 'dart:async';
++
++const dshaRequestZoneKey = #dshaAgentRequest;
++
++String? get dshaRequestId => Zone.current[dshaRequestZoneKey] as String?;
++
++Future<T> withDshaRequest<T>(
++  String requestId,
++  Future<T> Function() operation,
++) => runZoned(operation, zoneValues: {dshaRequestZoneKey: requestId});
++
++Object dshaServiceCommand(int revision) => switch (dshaRequestId) {
++  final String id => {'revision': revision, 'requestId': id},
++  null => revision,
++};
+diff --git a/lib/common/path.dart b/lib/common/path.dart
+index 540f0fe..0cafb12 100644
+--- a/lib/common/path.dart
++++ b/lib/common/path.dart
+@@ -7,6 +7,14 @@ import 'package:path/path.dart';
+ import 'package:path_provider/path_provider.dart';
+ 
+ class AppPath {
++  static void useEmbeddedStorage() {
++    Future<Directory> child(Future<Directory> parent) async =>
++        Directory(join((await parent).path, 'flclash')).create(recursive: true);
++    supportDirectory = () => child(getApplicationSupportDirectory());
++    temporaryDirectory = () => child(getTemporaryDirectory());
++    cacheDirectory = () => child(getApplicationCacheDirectory());
++  }
++
+   static AppPath? _instance;
+   late ResolveOnce<Directory> _dataDir;
+   late ResolveOnce<Directory?> _downloadDir;
+diff --git a/lib/l10n/intl/messages_en.dart b/lib/l10n/intl/messages_en.dart
+index 4cbb954..10cb8c8 100644
+--- a/lib/l10n/intl/messages_en.dart
++++ b/lib/l10n/intl/messages_en.dart
+@@ -777,6 +777,34 @@ class MessageLookup extends MessageLookupByLibrary {
+     "downloadingUpdate": MessageLookupByLibrary.simpleMessage(
+       "Downloading update",
+     ),
++    "dshaAgentBehavior": MessageLookupByLibrary.simpleMessage("Agent behavior"),
++    "dshaAgentExplanation": MessageLookupByLibrary.simpleMessage(
++      "These permissions apply only to the built-in DSHA Agent. Manual controls remain available. Revoking a permission blocks subsequent Agent actions.",
++    ),
++    "dshaAllowNodes": MessageLookupByLibrary.simpleMessage(
++      "Allow Agent to switch nodes",
++    ),
++    "dshaAllowRules": MessageLookupByLibrary.simpleMessage(
++      "Allow Agent to edit rules",
++    ),
++    "dshaAllowStart": MessageLookupByLibrary.simpleMessage(
++      "Allow Agent to start and stop the proxy",
++    ),
++    "dshaInvalidRule": MessageLookupByLibrary.simpleMessage(
++      "The proxy rule is invalid.",
++    ),
++    "dshaInvalidSelection": MessageLookupByLibrary.simpleMessage(
++      "The proxy group or node is unavailable.",
++    ),
++    "dshaOpenFirst": MessageLookupByLibrary.simpleMessage(
++      "Open built-in FlClash and complete initialization first.",
++    ),
++    "dshaOperationFailed": MessageLookupByLibrary.simpleMessage(
++      "The operation did not complete. Check FlClash and try again.",
++    ),
++    "dshaProfileRequired": MessageLookupByLibrary.simpleMessage(
++      "Import and select a profile first.",
++    ),
+     "duration": MessageLookupByLibrary.simpleMessage("Duration"),
+     "edit": MessageLookupByLibrary.simpleMessage("Edit"),
+     "editDashboard": MessageLookupByLibrary.simpleMessage("Edit dashboard"),
+@@ -1048,9 +1076,10 @@ class MessageLookup extends MessageLookupByLibrary {
+     "installCertificateSuccess": MessageLookupByLibrary.simpleMessage(
+       "Certificate installed",
+     ),
+-    "installedAppsPermissionDeniedMessage": MessageLookupByLibrary.simpleMessage(
+-      "The app list permission was denied, so installed apps cannot be listed. Please grant it manually in system settings.",
+-    ),
++    "installedAppsPermissionDeniedMessage":
++        MessageLookupByLibrary.simpleMessage(
++          "The app list permission was denied, so installed apps cannot be listed. Please grant it manually in system settings.",
++        ),
+     "installedAppsPermissionDesc": MessageLookupByLibrary.simpleMessage(
+       "This system hides the installed app list until the permission is granted. Authorize it to configure the per-app proxy.",
+     ),
+diff --git a/lib/l10n/intl/messages_es.dart b/lib/l10n/intl/messages_es.dart
+index bff3857..6ebe85c 100644
+--- a/lib/l10n/intl/messages_es.dart
++++ b/lib/l10n/intl/messages_es.dart
+@@ -826,6 +826,36 @@ class MessageLookup extends MessageLookupByLibrary {
+     "downloadingUpdate": MessageLookupByLibrary.simpleMessage(
+       "Descargando actualización",
+     ),
++    "dshaAgentBehavior": MessageLookupByLibrary.simpleMessage(
++      "Comportamiento del Agent",
++    ),
++    "dshaAgentExplanation": MessageLookupByLibrary.simpleMessage(
++      "Estos permisos solo se aplican al Agent integrado en DSHA. Los controles manuales siguen disponibles. Revocar un permiso bloquea las acciones posteriores del Agent.",
++    ),
++    "dshaAllowNodes": MessageLookupByLibrary.simpleMessage(
++      "Permitir al Agent cambiar de nodo",
++    ),
++    "dshaAllowRules": MessageLookupByLibrary.simpleMessage(
++      "Permitir al Agent editar reglas",
++    ),
++    "dshaAllowStart": MessageLookupByLibrary.simpleMessage(
++      "Permitir al Agent iniciar y detener el proxy",
++    ),
++    "dshaInvalidRule": MessageLookupByLibrary.simpleMessage(
++      "La regla de proxy no es válida.",
++    ),
++    "dshaInvalidSelection": MessageLookupByLibrary.simpleMessage(
++      "El grupo de proxies o el nodo seleccionado no está disponible.",
++    ),
++    "dshaOpenFirst": MessageLookupByLibrary.simpleMessage(
++      "Abra FlClash integrado y complete la inicialización.",
++    ),
++    "dshaOperationFailed": MessageLookupByLibrary.simpleMessage(
++      "La operación no se completó. Revise FlClash e inténtelo de nuevo.",
++    ),
++    "dshaProfileRequired": MessageLookupByLibrary.simpleMessage(
++      "Importe y seleccione un perfil primero.",
++    ),
+     "duration": MessageLookupByLibrary.simpleMessage("Duración"),
+     "edit": MessageLookupByLibrary.simpleMessage("Editar"),
+     "editDashboard": MessageLookupByLibrary.simpleMessage("Editar panel"),
+@@ -1125,9 +1155,10 @@ class MessageLookup extends MessageLookupByLibrary {
+     "installCertificateSuccess": MessageLookupByLibrary.simpleMessage(
+       "Certificado instalado",
+     ),
+-    "installedAppsPermissionDeniedMessage": MessageLookupByLibrary.simpleMessage(
+-      "Se denegó el permiso de lista de apps, por lo que no se pueden mostrar las apps instaladas. Concédelo manualmente en los ajustes del sistema.",
+-    ),
++    "installedAppsPermissionDeniedMessage":
++        MessageLookupByLibrary.simpleMessage(
++          "Se denegó el permiso de lista de apps, por lo que no se pueden mostrar las apps instaladas. Concédelo manualmente en los ajustes del sistema.",
++        ),
+     "installedAppsPermissionDesc": MessageLookupByLibrary.simpleMessage(
+       "Este sistema oculta la lista de apps instaladas hasta que se concede el permiso. Autorízalo para configurar el proxy por app.",
+     ),
+diff --git a/lib/l10n/intl/messages_fr.dart b/lib/l10n/intl/messages_fr.dart
+index 346168b..44a5b00 100644
+--- a/lib/l10n/intl/messages_fr.dart
++++ b/lib/l10n/intl/messages_fr.dart
+@@ -826,6 +826,36 @@ class MessageLookup extends MessageLookupByLibrary {
+     "downloadingUpdate": MessageLookupByLibrary.simpleMessage(
+       "Téléchargement de la mise à jour",
+     ),
++    "dshaAgentBehavior": MessageLookupByLibrary.simpleMessage(
++      "Comportement de l’Agent",
++    ),
++    "dshaAgentExplanation": MessageLookupByLibrary.simpleMessage(
++      "Ces autorisations concernent uniquement l’Agent intégré à DSHA. Les commandes manuelles restent disponibles. La révocation bloque les actions ultérieures de l’Agent.",
++    ),
++    "dshaAllowNodes": MessageLookupByLibrary.simpleMessage(
++      "Autoriser l’Agent à changer de nœud",
++    ),
++    "dshaAllowRules": MessageLookupByLibrary.simpleMessage(
++      "Autoriser l’Agent à modifier les règles",
++    ),
++    "dshaAllowStart": MessageLookupByLibrary.simpleMessage(
++      "Autoriser l’Agent à démarrer et arrêter le proxy",
++    ),
++    "dshaInvalidRule": MessageLookupByLibrary.simpleMessage(
++      "La règle de proxy est invalide.",
++    ),
++    "dshaInvalidSelection": MessageLookupByLibrary.simpleMessage(
++      "Le groupe de proxys ou le nœud choisi est indisponible.",
++    ),
++    "dshaOpenFirst": MessageLookupByLibrary.simpleMessage(
++      "Ouvrez FlClash intégré et terminez son initialisation.",
++    ),
++    "dshaOperationFailed": MessageLookupByLibrary.simpleMessage(
++      "L’opération n’a pas abouti. Vérifiez FlClash et réessayez.",
++    ),
++    "dshaProfileRequired": MessageLookupByLibrary.simpleMessage(
++      "Importez et sélectionnez d’abord un profil.",
++    ),
+     "duration": MessageLookupByLibrary.simpleMessage("Durée"),
+     "edit": MessageLookupByLibrary.simpleMessage("Modifier"),
+     "editDashboard": MessageLookupByLibrary.simpleMessage(
+@@ -1127,9 +1157,10 @@ class MessageLookup extends MessageLookupByLibrary {
+     "installCertificateSuccess": MessageLookupByLibrary.simpleMessage(
+       "Certificat installé",
+     ),
+-    "installedAppsPermissionDeniedMessage": MessageLookupByLibrary.simpleMessage(
+-      "L’autorisation de la liste des apps a été refusée ; les apps installées ne peuvent donc pas être listées. Veuillez l’accorder manuellement dans les réglages du système.",
+-    ),
++    "installedAppsPermissionDeniedMessage":
++        MessageLookupByLibrary.simpleMessage(
++          "L’autorisation de la liste des apps a été refusée ; les apps installées ne peuvent donc pas être listées. Veuillez l’accorder manuellement dans les réglages du système.",
++        ),
+     "installedAppsPermissionDesc": MessageLookupByLibrary.simpleMessage(
+       "Ce système masque la liste des apps installées tant que l’autorisation n’est pas accordée. Accordez-la pour configurer le proxy par app.",
+     ),
+diff --git a/lib/l10n/intl/messages_ja.dart b/lib/l10n/intl/messages_ja.dart
+index 7d3c0d1..e628d54 100644
+--- a/lib/l10n/intl/messages_ja.dart
++++ b/lib/l10n/intl/messages_ja.dart
+@@ -660,6 +660,30 @@ class MessageLookup extends MessageLookupByLibrary {
+     "download": MessageLookupByLibrary.simpleMessage("ダウンロード"),
+     "downloadBandwidth": MessageLookupByLibrary.simpleMessage("ダウンロード帯域幅"),
+     "downloadingUpdate": MessageLookupByLibrary.simpleMessage("更新をダウンロード中"),
++    "dshaAgentBehavior": MessageLookupByLibrary.simpleMessage("Agent の動作"),
++    "dshaAgentExplanation": MessageLookupByLibrary.simpleMessage(
++      "これらの権限は DSHA 内蔵 Agent にのみ適用されます。手動操作には影響しません。権限を取り消すと、その後の Agent の操作を拒否します。",
++    ),
++    "dshaAllowNodes": MessageLookupByLibrary.simpleMessage(
++      "Agent にノードの切り替えを許可",
++    ),
++    "dshaAllowRules": MessageLookupByLibrary.simpleMessage("Agent にルールの編集を許可"),
++    "dshaAllowStart": MessageLookupByLibrary.simpleMessage(
++      "Agent にプロキシの開始と停止を許可",
++    ),
++    "dshaInvalidRule": MessageLookupByLibrary.simpleMessage("プロキシルールが無効です。"),
++    "dshaInvalidSelection": MessageLookupByLibrary.simpleMessage(
++      "選択したプロキシグループまたはノードは利用できません。",
++    ),
++    "dshaOpenFirst": MessageLookupByLibrary.simpleMessage(
++      "内蔵 FlClash を開き、初期設定を完了してください。",
++    ),
++    "dshaOperationFailed": MessageLookupByLibrary.simpleMessage(
++      "操作が完了しませんでした。FlClash を確認して再試行してください。",
++    ),
++    "dshaProfileRequired": MessageLookupByLibrary.simpleMessage(
++      "設定をインポートして選択してください。",
++    ),
+     "duration": MessageLookupByLibrary.simpleMessage("経過時間"),
+     "edit": MessageLookupByLibrary.simpleMessage("編集"),
+     "editDashboard": MessageLookupByLibrary.simpleMessage("ダッシュボードを編集"),
+diff --git a/lib/l10n/intl/messages_ko.dart b/lib/l10n/intl/messages_ko.dart
+index b940cc8..6a6d01f 100644
+--- a/lib/l10n/intl/messages_ko.dart
++++ b/lib/l10n/intl/messages_ko.dart
+@@ -650,6 +650,28 @@ class MessageLookup extends MessageLookupByLibrary {
+     "download": MessageLookupByLibrary.simpleMessage("다운로드"),
+     "downloadBandwidth": MessageLookupByLibrary.simpleMessage("다운로드 대역폭"),
+     "downloadingUpdate": MessageLookupByLibrary.simpleMessage("업데이트 다운로드 중"),
++    "dshaAgentBehavior": MessageLookupByLibrary.simpleMessage("Agent 동작"),
++    "dshaAgentExplanation": MessageLookupByLibrary.simpleMessage(
++      "이 권한은 DSHA 내장 Agent에만 적용됩니다. 수동 조작은 계속 사용할 수 있습니다. 권한을 끄면 이후 Agent 작업이 차단됩니다.",
++    ),
++    "dshaAllowNodes": MessageLookupByLibrary.simpleMessage("Agent의 노드 전환 허용"),
++    "dshaAllowRules": MessageLookupByLibrary.simpleMessage("Agent의 규칙 수정 허용"),
++    "dshaAllowStart": MessageLookupByLibrary.simpleMessage(
++      "Agent의 프록시 시작 및 중지 허용",
++    ),
++    "dshaInvalidRule": MessageLookupByLibrary.simpleMessage("프록시 규칙이 잘못되었습니다."),
++    "dshaInvalidSelection": MessageLookupByLibrary.simpleMessage(
++      "선택한 프록시 그룹 또는 노드를 사용할 수 없습니다.",
++    ),
++    "dshaOpenFirst": MessageLookupByLibrary.simpleMessage(
++      "내장 FlClash를 열고 초기 설정을 완료하세요.",
++    ),
++    "dshaOperationFailed": MessageLookupByLibrary.simpleMessage(
++      "작업을 완료하지 못했습니다. FlClash를 확인하고 다시 시도하세요.",
++    ),
++    "dshaProfileRequired": MessageLookupByLibrary.simpleMessage(
++      "먼저 프로필을 가져와 선택하세요.",
++    ),
+     "duration": MessageLookupByLibrary.simpleMessage("소요 시간"),
+     "edit": MessageLookupByLibrary.simpleMessage("편집"),
+     "editDashboard": MessageLookupByLibrary.simpleMessage("대시보드 편집"),
+diff --git a/lib/l10n/intl/messages_ru.dart b/lib/l10n/intl/messages_ru.dart
+index 6ef6821..99cfae1 100644
+--- a/lib/l10n/intl/messages_ru.dart
++++ b/lib/l10n/intl/messages_ru.dart
+@@ -809,6 +809,34 @@ class MessageLookup extends MessageLookupByLibrary {
+     "downloadingUpdate": MessageLookupByLibrary.simpleMessage(
+       "Загрузка обновления",
+     ),
++    "dshaAgentBehavior": MessageLookupByLibrary.simpleMessage("Действия Agent"),
++    "dshaAgentExplanation": MessageLookupByLibrary.simpleMessage(
++      "Разрешения относятся только к встроенному Agent DSHA. Ручное управление остаётся доступным. Отзыв разрешения блокирует последующие действия Agent.",
++    ),
++    "dshaAllowNodes": MessageLookupByLibrary.simpleMessage(
++      "Разрешить Agent переключать узлы",
++    ),
++    "dshaAllowRules": MessageLookupByLibrary.simpleMessage(
++      "Разрешить Agent изменять правила",
++    ),
++    "dshaAllowStart": MessageLookupByLibrary.simpleMessage(
++      "Разрешить Agent запускать и останавливать прокси",
++    ),
++    "dshaInvalidRule": MessageLookupByLibrary.simpleMessage(
++      "Недопустимое правило прокси.",
++    ),
++    "dshaInvalidSelection": MessageLookupByLibrary.simpleMessage(
++      "Выбранная группа прокси или узел недоступны.",
++    ),
++    "dshaOpenFirst": MessageLookupByLibrary.simpleMessage(
++      "Откройте встроенный FlClash и завершите инициализацию.",
++    ),
++    "dshaOperationFailed": MessageLookupByLibrary.simpleMessage(
++      "Операция не завершена. Проверьте FlClash и повторите попытку.",
++    ),
++    "dshaProfileRequired": MessageLookupByLibrary.simpleMessage(
++      "Сначала импортируйте и выберите профиль.",
++    ),
+     "duration": MessageLookupByLibrary.simpleMessage("Длительность"),
+     "edit": MessageLookupByLibrary.simpleMessage("Редактировать"),
+     "editDashboard": MessageLookupByLibrary.simpleMessage("Изменить панель"),
+@@ -1096,9 +1124,10 @@ class MessageLookup extends MessageLookupByLibrary {
+     "installCertificateSuccess": MessageLookupByLibrary.simpleMessage(
+       "Сертификат установлен",
+     ),
+-    "installedAppsPermissionDeniedMessage": MessageLookupByLibrary.simpleMessage(
+-      "Разрешение на список приложений отклонено, поэтому установленные приложения недоступны. Предоставьте его вручную в системных настройках.",
+-    ),
++    "installedAppsPermissionDeniedMessage":
++        MessageLookupByLibrary.simpleMessage(
++          "Разрешение на список приложений отклонено, поэтому установленные приложения недоступны. Предоставьте его вручную в системных настройках.",
++        ),
+     "installedAppsPermissionDesc": MessageLookupByLibrary.simpleMessage(
+       "Эта система не выдаёт список установленных приложений без разрешения. Предоставьте его, чтобы настроить прокси для отдельных приложений.",
+     ),
+diff --git a/lib/l10n/intl/messages_zh_CN.dart b/lib/l10n/intl/messages_zh_CN.dart
+index e50efba..045479b 100644
+--- a/lib/l10n/intl/messages_zh_CN.dart
++++ b/lib/l10n/intl/messages_zh_CN.dart
+@@ -606,6 +606,24 @@ class MessageLookup extends MessageLookupByLibrary {
+     "download": MessageLookupByLibrary.simpleMessage("下载"),
+     "downloadBandwidth": MessageLookupByLibrary.simpleMessage("下行带宽"),
+     "downloadingUpdate": MessageLookupByLibrary.simpleMessage("正在下载更新"),
++    "dshaAgentBehavior": MessageLookupByLibrary.simpleMessage("Agent 行为"),
++    "dshaAgentExplanation": MessageLookupByLibrary.simpleMessage(
++      "这些权限仅适用于 DSHA 内置 Agent，不影响手动操作。关闭权限后会阻止后续 Agent 操作。",
++    ),
++    "dshaAllowNodes": MessageLookupByLibrary.simpleMessage("允许 Agent 切换节点"),
++    "dshaAllowRules": MessageLookupByLibrary.simpleMessage("允许 Agent 修改规则"),
++    "dshaAllowStart": MessageLookupByLibrary.simpleMessage("允许 Agent 启停代理"),
++    "dshaInvalidRule": MessageLookupByLibrary.simpleMessage("代理规则无效。"),
++    "dshaInvalidSelection": MessageLookupByLibrary.simpleMessage(
++      "所选代理组或节点不可用。",
++    ),
++    "dshaOpenFirst": MessageLookupByLibrary.simpleMessage(
++      "请先打开内置 FlClash 并完成初始化。",
++    ),
++    "dshaOperationFailed": MessageLookupByLibrary.simpleMessage(
++      "操作未完成，请检查 FlClash 后重试。",
++    ),
++    "dshaProfileRequired": MessageLookupByLibrary.simpleMessage("请先导入并选择配置。"),
+     "duration": MessageLookupByLibrary.simpleMessage("时长"),
+     "edit": MessageLookupByLibrary.simpleMessage("编辑"),
+     "editDashboard": MessageLookupByLibrary.simpleMessage("编辑仪表盘"),
+diff --git a/lib/l10n/l10n.dart b/lib/l10n/l10n.dart
+index ffb158e..454394c 100644
+--- a/lib/l10n/l10n.dart
++++ b/lib/l10n/l10n.dart
+@@ -7663,8 +7663,7 @@ class AppLocalizations {
+   String customImportDroppedSubRules(num count, Object label) {
+     return Intl.plural(
+       count,
+-      one:
+-          '1 SUB-RULE rule was dropped, since custom profiles do not support sub-rules',
++      one: '1 SUB-RULE rule was dropped, since custom profiles do not support sub-rules',
+       other:
+           '$label SUB-RULE rules were dropped, since custom profiles do not support sub-rules',
+       name: 'customImportDroppedSubRules',
+@@ -9072,6 +9071,106 @@ class AppLocalizations {
+       args: [],
+     );
+   }
++
++  /// `Agent behavior`
++  String get dshaAgentBehavior {
++    return Intl.message(
++      'Agent behavior',
++      name: 'dshaAgentBehavior',
++      desc: '',
++      args: [],
++    );
++  }
++
++  /// `Allow Agent to start and stop the proxy`
++  String get dshaAllowStart {
++    return Intl.message(
++      'Allow Agent to start and stop the proxy',
++      name: 'dshaAllowStart',
++      desc: '',
++      args: [],
++    );
++  }
++
++  /// `Allow Agent to switch nodes`
++  String get dshaAllowNodes {
++    return Intl.message(
++      'Allow Agent to switch nodes',
++      name: 'dshaAllowNodes',
++      desc: '',
++      args: [],
++    );
++  }
++
++  /// `Allow Agent to edit rules`
++  String get dshaAllowRules {
++    return Intl.message(
++      'Allow Agent to edit rules',
++      name: 'dshaAllowRules',
++      desc: '',
++      args: [],
++    );
++  }
++
++  /// `These permissions apply only to the built-in DSHA Agent. Manual controls remain available. Revoking a permission blocks subsequent Agent actions.`
++  String get dshaAgentExplanation {
++    return Intl.message(
++      'These permissions apply only to the built-in DSHA Agent. Manual controls remain available. Revoking a permission blocks subsequent Agent actions.',
++      name: 'dshaAgentExplanation',
++      desc: '',
++      args: [],
++    );
++  }
++
++  /// `Open built-in FlClash and complete initialization first.`
++  String get dshaOpenFirst {
++    return Intl.message(
++      'Open built-in FlClash and complete initialization first.',
++      name: 'dshaOpenFirst',
++      desc: '',
++      args: [],
++    );
++  }
++
++  /// `Import and select a profile first.`
++  String get dshaProfileRequired {
++    return Intl.message(
++      'Import and select a profile first.',
++      name: 'dshaProfileRequired',
++      desc: '',
++      args: [],
++    );
++  }
++
++  /// `The operation did not complete. Check FlClash and try again.`
++  String get dshaOperationFailed {
++    return Intl.message(
++      'The operation did not complete. Check FlClash and try again.',
++      name: 'dshaOperationFailed',
++      desc: '',
++      args: [],
++    );
++  }
++
++  /// `The proxy group or node is unavailable.`
++  String get dshaInvalidSelection {
++    return Intl.message(
++      'The proxy group or node is unavailable.',
++      name: 'dshaInvalidSelection',
++      desc: '',
++      args: [],
++    );
++  }
++
++  /// `The proxy rule is invalid.`
++  String get dshaInvalidRule {
++    return Intl.message(
++      'The proxy rule is invalid.',
++      name: 'dshaInvalidRule',
++      desc: '',
++      args: [],
++    );
++  }
+ }
+ 
+ class AppLocalizationDelegate extends LocalizationsDelegate<AppLocalizations> {
+diff --git a/lib/main.dart b/lib/main.dart
+index 9b90013..c677881 100644
+--- a/lib/main.dart
++++ b/lib/main.dart
+@@ -11,6 +11,7 @@ import 'package:shared_preferences_platform_interface/shared_preferences_platfor
+ import 'application.dart';
+ import 'bootstrap.dart';
+ import 'common/app_data.dart';
++import 'common/dsha_agent.dart';
+ import 'common/common.dart';
+ import 'common/preferences_store.dart';
+ import 'common/window.dart';
+@@ -19,6 +20,7 @@ void main(List<String> args) {
+   runZonedGuarded(
+     () async {
+       WidgetsFlutterBinding.ensureInitialized();
++      if (dshaEmbedded) await prepareDshaHost();
+       if (Platform.isWindows || Platform.isLinux) {
+         SharedPreferencesStorePlatform.instance = AtomicFilePreferencesStore(
+           appPath.sharedPreferencesPath,
+@@ -42,6 +44,7 @@ void main(List<String> args) {
+         await FlClashHttpOverrides.trustCoreRoots();
+         HttpOverrides.global = FlClashHttpOverrides(container);
+         request.attach(container.read);
++        if (dshaEmbedded) DshaAgentBridge(container).attach();
+         runApp(
+           UncontrolledProviderScope(
+             container: container,
+diff --git a/lib/plugins/service.dart b/lib/plugins/service.dart
+index b294602..6ce260c 100644
+--- a/lib/plugins/service.dart
++++ b/lib/plugins/service.dart
+@@ -2,6 +2,7 @@ import 'dart:async';
+ import 'dart:convert';
+ 
+ import 'package:fl_clash/common/common.dart';
++import 'package:fl_clash/common/dsha_agent_scope.dart';
+ import 'package:fl_clash/core/event.dart';
+ import 'package:fl_clash/core/method.dart';
+ import 'package:fl_clash/core/spill.dart';
+@@ -84,9 +85,22 @@ class Service {
+   }
+ 
+   Future<CoreMethodResponse> invokeMethod(CoreMethodCall call) async {
++    final payload = call.toJson();
++    if (dshaRequestId != null &&
++        const {
++          CoreMethod.configSetup,
++          CoreMethod.configUpdate,
++          CoreMethod.proxySelect,
++          CoreMethod.listenerStart,
++          CoreMethod.listenerStop,
++          CoreMethod.connectionReset,
++          CoreMethod.connectionCloseAll,
++        }.contains(call.method)) {
++      payload['_dshaRequestId'] = dshaRequestId;
++    }
+     final data = await _coreChannel.invokeMethod<Uint8List>(
+       'invokeMethod',
+-      json.encode(call),
++      json.encode(payload),
+     );
+     if (data == null) {
+       throw CoreMethodException(
+@@ -117,14 +131,17 @@ class Service {
+     _startRequested = true;
+     return await methodChannel.invokeMethod<bool>(
+           'start',
+-          ++_commandRevision,
++          dshaServiceCommand(++_commandRevision),
+         ) ??
+         false;
+   }
+ 
+   Future<bool> stop() async {
+     _startRequested = false;
+-    return await methodChannel.invokeMethod<bool>('stop', ++_commandRevision) ??
++    return await methodChannel.invokeMethod<bool>(
++          'stop',
++          dshaServiceCommand(++_commandRevision),
++        ) ??
+         false;
+   }
+ 
+diff --git a/lib/views/dsha_agent.dart b/lib/views/dsha_agent.dart
+new file mode 100644
+index 0000000..555ba89
+--- /dev/null
++++ b/lib/views/dsha_agent.dart
+@@ -0,0 +1,100 @@
++import 'dart:convert';
++
++import 'package:fl_clash/common/common.dart';
++import 'package:fl_clash/common/dsha_agent.dart';
++import 'package:fl_clash/widgets/widgets.dart';
++import 'package:flutter/widgets.dart';
++
++class DshaAgentView extends StatefulWidget {
++  const DshaAgentView({super.key});
++  @override
++  State<DshaAgentView> createState() => _DshaAgentViewState();
++}
++
++class _DshaAgentViewState extends State<DshaAgentView> {
++  Map<String, dynamic>? _policy;
++  bool _saving = false;
++  String? _error;
++
++  @override
++  void initState() {
++    super.initState();
++    _load();
++  }
++
++  Future<void> _load() async {
++    try {
++      final value = await dshaAgentChannel.invokeMethod<String>('policy');
++      if (mounted) {
++        setState(() => _policy = jsonDecode(value!) as Map<String, dynamic>);
++      }
++    } catch (error) {
++      if (mounted) setState(() => _error = '$error');
++    }
++  }
++
++  Future<void> _set(String key, bool value) async {
++    if (_saving) return;
++    setState(() => _saving = true);
++    try {
++      final result = await dshaAgentChannel.invokeMethod<String>('setPolicy', {
++        'key': key,
++        'value': value,
++      });
++      if (mounted) {
++        setState(() {
++          _policy = jsonDecode(result!) as Map<String, dynamic>;
++          _error = null;
++        });
++      }
++    } catch (error) {
++      if (mounted) setState(() => _error = '$error');
++    } finally {
++      if (mounted) setState(() => _saving = false);
++    }
++  }
++
++  @override
++  Widget build(BuildContext context) {
++    final strings = context.appLocalizations;
++    return Scaffold(
++      title: strings.dshaAgentBehavior,
++      body: ListView(
++        padding: EdgeInsets.fromLTRB(
++          16,
++          context.sectionsTopPadding,
++          16,
++          20 + context.bottomInset,
++        ),
++        children: [
++          generateSection(
++            items: [
++              for (final entry in {
++                'start': strings.dshaAllowStart,
++                'nodes': strings.dshaAllowNodes,
++                'rules': strings.dshaAllowRules,
++              }.entries)
++                IgnorePointer(
++                  ignoring: _saving || _policy == null,
++                  child: ListItem.toggle(
++                    title: Text(entry.value),
++                    value: _policy?[entry.key] == true,
++                    onChanged: (value) => _set(entry.key, value),
++                  ),
++                ),
++            ],
++          ),
++          Padding(
++            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
++            child: Text(strings.dshaAgentExplanation),
++          ),
++          if (_error != null)
++            Padding(
++              padding: const EdgeInsets.all(12),
++              child: Text(strings.dshaOperationFailed),
++            ),
++        ],
++      ),
++    );
++  }
++}
+diff --git a/lib/views/tools.dart b/lib/views/tools.dart
+index ae786fb..f5e97e7 100644
+--- a/lib/views/tools.dart
++++ b/lib/views/tools.dart
+@@ -14,6 +14,8 @@ import 'package:flutter/widgets.dart';
+ import 'package:flutter_riverpod/flutter_riverpod.dart';
+ 
+ import 'config/advanced.dart';
++import 'dsha_agent.dart';
++import 'package:fl_clash/common/dsha_agent.dart';
+ import 'developer.dart';
+ import 'disclaimer.dart';
+ import 'theme.dart';
+@@ -57,6 +59,12 @@ class _ToolViewState extends ConsumerState<ToolsView> {
+         const _BackupItem(),
+         const _AdvancedConfigItem(),
+         const _GeneralItem(),
++        if (dshaEmbedded)
++          ListItem.open(
++            leading: const GlyphIcon(AppGlyphs.sparkle),
++            title: Text(context.appLocalizations.dshaAgentBehavior),
++            widget: const DshaAgentView(),
++          ),
+       ],
+     );
+   }
+diff --git a/plugins/rust_api/hook/build.dart b/plugins/rust_api/hook/build.dart
+index 9780ef0..6dfa885 100644
+--- a/plugins/rust_api/hook/build.dart
++++ b/plugins/rust_api/hook/build.dart
+@@ -28,12 +28,53 @@ Map<String, String> _bindgenEnvironment(BuildInput input) {
+     return const {};
+   }
+   final llvmRoot = File.fromUri(compiler).parent.parent;
++  // native_toolchain_rust 1.0.6 leaves these arguments unquoted, splitting an
++  // Android SDK installed in a path containing spaces. Bindgen uses shlex.
++  final triple = switch (input.config.code.targetArchitecture) {
++    Architecture.arm64 => 'aarch64-linux-android',
++    Architecture.x64 => 'x86_64-linux-android',
++    Architecture.arm => 'arm-linux-androideabi',
++    Architecture.ia32 => 'i686-linux-android',
++    _ => throw UnsupportedError('Unsupported Android architecture'),
++  };
++  final sysroot = '${llvmRoot.path}/sysroot'.replaceAll(r'\', '/');
++  final environment = <String, String>{
++    'BINDGEN_EXTRA_CLANG_ARGS_${triple.replaceAll('-', '_')}':
++        '--sysroot="$sysroot" -I"$sysroot/usr/include/$triple"',
++  };
++  if (Platform.isWindows) {
++    final directory = Platform.environment['LIBCLANG_PATH'];
++    if (directory != null && File('$directory/libclang.dll').existsSync()) {
++      // A standalone Windows libclang DLL has no resource headers alongside it.
++      // Use the NDK's builtin C headers (stdbool/stddef/stdarg), not host headers.
++      final clangRoot = Directory('${llvmRoot.path}/lib/clang');
++      final resources = clangRoot.listSync().whereType<Directory>().where(
++        (entry) => File('${entry.path}/include/stdbool.h').existsSync(),
++      );
++      if (resources.length != 1) {
++        throw StateError('Cannot locate the NDK clang resource headers');
++      }
++      environment.updateAll(
++        (_, value) =>
++            '$value -resource-dir="${resources.single.path.replaceAll(r'\', '/')}"',
++      );
++      final profile = Platform.environment['USERPROFILE'];
++      if (profile == null || profile.isEmpty) {
++        throw StateError('Cannot remap Rust build paths without USERPROFILE');
++      }
++      return {
++        ...environment,
++        'LIBCLANG_PATH': directory,
++        'CARGO_ENCODED_RUSTFLAGS': '--remap-path-prefix=$profile=/dsha/user',
++      };
++    }
++  }
+   for (final name in const ['lib', 'lib64']) {
+     final directory = Directory(
+       '${llvmRoot.path}${Platform.pathSeparator}$name',
+     );
+     if (directory.existsSync() && directory.listSync().any(_isLibclang)) {
+-      return {'LIBCLANG_PATH': directory.path};
++      return {...environment, 'LIBCLANG_PATH': directory.path};
+     }
+   }
+   throw StateError(
+diff --git a/plugins/rust_api/rust/rust-toolchain.toml b/plugins/rust_api/rust/rust-toolchain.toml
+index c8bc3b2..c4a2d95 100644
+--- a/plugins/rust_api/rust/rust-toolchain.toml
++++ b/plugins/rust_api/rust/rust-toolchain.toml
+@@ -1,14 +1,8 @@
+ [toolchain]
+ # native_toolchain_rust refuses a floating channel; bump this deliberately.
+ channel = "1.99.0"
++profile = "minimal"
+ targets = [
+-  "aarch64-apple-darwin",
+-  "x86_64-apple-darwin",
+   "aarch64-linux-android",
+-  "armv7-linux-androideabi",
+   "x86_64-linux-android",
+-  "aarch64-pc-windows-msvc",
+-  "x86_64-pc-windows-msvc",
+-  "aarch64-unknown-linux-gnu",
+-  "x86_64-unknown-linux-gnu",
+ ]
+diff --git a/pubspec.yaml b/pubspec.yaml
+index 212e6ff..3ce79ac 100644
+--- a/pubspec.yaml
++++ b/pubspec.yaml
+@@ -92,6 +92,10 @@ dev_dependencies:
+   mocktail: ^1.0.5
+ 
+ flutter:
++  module:
++    androidX: true
++    androidPackage: dev.deepseek.mobile.flclash
++    iosBundleIdentifier: dev.deepseek.mobile.flclash
+   assets:
+     - assets/data/
+     - assets/fonts/
+diff --git a/test/common/dsha_agent_scope_test.dart b/test/common/dsha_agent_scope_test.dart
+new file mode 100644
+index 0000000..e4003f8
+--- /dev/null
++++ b/test/common/dsha_agent_scope_test.dart
+@@ -0,0 +1,64 @@
++import 'dart:async';
++
++import 'package:fl_clash/common/dsha_agent_scope.dart';
++import 'package:fl_clash/plugins/service.dart';
++import 'package:flutter/services.dart';
++import 'package:flutter_test/flutter_test.dart';
++
++void main() {
++  TestWidgetsFlutterBinding.ensureInitialized();
++  const channel = MethodChannel('com.follow.clash/service');
++  var permitted = true;
++  var starts = 0;
++
++  setUp(() {
++    permitted = true;
++    starts = 0;
++    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
++        .setMockMethodCallHandler(channel, (call) async {
++          if (call.method == 'start') {
++            if (call.arguments case final Map envelope) {
++              expect(envelope['requestId'], 'pending-agent');
++              if (!permitted) throw PlatformException(code: 'AGENT_PERMISSION');
++            }
++            starts++;
++          }
++          return true;
++        });
++  });
++
++  tearDown(
++    () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
++        .setMockMethodCallHandler(channel, null),
++  );
++
++  test(
++    'delayed Agent start retains its identity through the service boundary',
++    () async {
++      final waiting = Completer<void>();
++      final operation = withDshaRequest('pending-agent', () async {
++        await waiting.future;
++        return Service().start();
++      });
++      expect(dshaRequestId, isNull);
++      permitted = false;
++      final rejection = expectLater(
++        operation,
++        throwsA(isA<PlatformException>()),
++      );
++      waiting.complete();
++      await rejection;
++      expect(starts, 0);
++    },
++  );
++
++  test(
++    'manual service controls are independent from Agent permission',
++    () async {
++      permitted = false;
++      expect(dshaServiceCommand(7), 7);
++      expect(await Service().start(), isTrue);
++      expect(starts, 1);
++    },
++  );
++}
+diff --git a/test/lint/dynamic_message_key_test.dart b/test/lint/dynamic_message_key_test.dart
+index e5fd72f..c7786a5 100644
+--- a/test/lint/dynamic_message_key_test.dart
++++ b/test/lint/dynamic_message_key_test.dart
+@@ -46,7 +46,7 @@ void main() {
+     final offenders = <String>[];
+     for (final entity in Directory(_libDir).listSync(recursive: true)) {
+       if (entity is! File || !entity.path.endsWith('.dart')) continue;
+-      final path = entity.path;
++      final path = entity.path.replaceAll('\\', '/');
+       if (path.contains('/generated/') || path.contains('/l10n/')) continue;
+       if (entity.readAsStringSync().contains('Intl.message(')) {
+         offenders.add(path);
+diff --git a/test/views/dsha_agent_test.dart b/test/views/dsha_agent_test.dart
+new file mode 100644
+index 0000000..5b2b2d0
+--- /dev/null
++++ b/test/views/dsha_agent_test.dart
+@@ -0,0 +1,81 @@
++import 'dart:convert';
++
++import 'package:fl_clash/common/dsha_agent.dart';
++import 'package:fl_clash/ui/ui.dart';
++import 'package:fl_clash/views/dsha_agent.dart';
++import 'package:flutter/services.dart';
++import 'package:flutter/widgets.dart';
++import 'package:flutter_test/flutter_test.dart';
++
++import '../helpers/test_app.dart';
++
++void main() {
++  TestWidgetsFlutterBinding.ensureInitialized();
++  late Map<String, bool> policy;
++  var failWrite = false;
++  final calls = <String>[];
++
++  setUp(() {
++    policy = {'start': false, 'nodes': false, 'rules': false};
++    calls.clear();
++    failWrite = false;
++    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
++        .setMockMethodCallHandler(dshaAgentChannel, (call) async {
++          if (call.method == 'setPolicy') {
++            calls.add(call.arguments['key'] as String);
++            if (failWrite) throw PlatformException(code: 'disk_error');
++            policy[call.arguments['key'] as String] =
++                call.arguments['value'] as bool;
++          }
++          return jsonEncode(policy);
++        });
++  });
++
++  tearDown(() {
++    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
++        .setMockMethodCallHandler(dshaAgentChannel, null);
++  });
++
++  testWidgets('permission rows write independently and survive reopening', (
++    tester,
++  ) async {
++    await tester.pumpWidget(
++      const TestApp(wrapInProviderScope: true, child: DshaAgentView()),
++    );
++    await tester.pumpAndSettle();
++    expect(find.byType(ListItem), findsNWidgets(3));
++    await tester.tap(find.text('Allow Agent to switch nodes'));
++    await tester.pumpAndSettle();
++    expect(policy, {'start': false, 'nodes': true, 'rules': false});
++    expect(calls, ['nodes']);
++    await tester.pumpWidget(const SizedBox.shrink());
++    await tester.pumpWidget(
++      const TestApp(wrapInProviderScope: true, child: DshaAgentView()),
++    );
++    await tester.pumpAndSettle();
++    expect(tester.widget<Switch>(find.byType(Switch).at(1)).value, isTrue);
++    await tester.tap(find.text('Allow Agent to switch nodes'));
++    await tester.pumpAndSettle();
++    expect(policy['nodes'], isFalse);
++  });
++
++  testWidgets(
++    'failed permission save keeps previous state and reports failure',
++    (tester) async {
++      failWrite = true;
++      await tester.pumpWidget(
++        const TestApp(wrapInProviderScope: true, child: DshaAgentView()),
++      );
++      await tester.pumpAndSettle();
++      await tester.tap(find.text('Allow Agent to start and stop the proxy'));
++      await tester.pumpAndSettle();
++      expect(policy['start'], isFalse);
++      expect(
++        find.text(
++          'The operation did not complete. Check FlClash and try again.',
++        ),
++        findsOneWidget,
++      );
++    },
++  );
++}

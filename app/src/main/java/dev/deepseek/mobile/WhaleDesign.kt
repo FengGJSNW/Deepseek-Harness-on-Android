@@ -1,8 +1,7 @@
 package dev.deepseek.mobile
 
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.*
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
@@ -22,8 +21,6 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.toggleableState
-import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -39,7 +36,7 @@ internal val WhalePanelShape = ContinuousShape(20.dp)
 
 /** The exact maid character, cropped only at draw time; never a system avatar. */
 @Composable
-internal fun JingAvatar(size: Dp = 34.dp, label: String = "小鲸鱼娘头像") {
+internal fun JingAvatar(size: Dp = 34.dp, label: String = "鲸鱼娘头像") {
     Box(
         Modifier.size(size)
             .clip(CircleShape)
@@ -62,13 +59,26 @@ internal fun JingAvatar(size: Dp = 34.dp, label: String = "小鲸鱼娘头像") 
 /** All geometry here is drawn in code. No platform checkbox, radio, switch or emoji glyph. */
 @Composable
 internal fun WhaleChoice(selected: Boolean, label: String, onClick: () -> Unit) {
+    val interactions = remember { MutableInteractionSource() }
+    val haptics = rememberUiHaptics()
     Row(
         Modifier.fillMaxWidth()
             .padding(vertical = 4.dp)
-            .clip(ContinuousShape(16.dp))
-            .background(if (selected) Color(0xFFF0F4FF) else Color.White)
+            .dshaPressFeedback(
+                interactions,
+                if (selected) WhaleTint else Color.White,
+                ContinuousShape(16.dp),
+            )
             .border(1.dp, if (selected) Color(0xFFC8D6FF) else WhaleLine, ContinuousShape(16.dp))
-            .selectable(selected = selected, role = Role.RadioButton, onClick = onClick)
+            .selectable(
+                selected = selected,
+                role = Role.RadioButton,
+                interactionSource = interactions,
+                indication = null,
+            ) {
+                if (!selected) haptics.perform(UiHaptic.Selection)
+                onClick()
+            }
             .padding(15.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -92,28 +102,7 @@ internal fun WhaleChoice(selected: Boolean, label: String, onClick: () -> Unit) 
 
 @Composable
 internal fun WhaleToggle(checked: Boolean, onChange: (Boolean) -> Unit, label: String) {
-    val color by
-        animateColorAsState(if (checked) WhaleBlue else Color(0xFFDCE2ED), label = "toggle-color")
-    val shift by animateDpAsState(if (checked) 22.dp else 2.dp, label = "toggle-knob")
-    Box(
-        Modifier.size(48.dp)
-            .semantics {
-                contentDescription = label
-                toggleableState = if (checked) ToggleableState.On else ToggleableState.Off
-            }
-            .clip(ContinuousShape(16.dp))
-            .clickable(role = Role.Switch) { onChange(!checked) },
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(Modifier.size(46.dp, 26.dp).background(color, ContinuousShape(13.dp))) {
-            Box(
-                Modifier.padding(top = 2.dp)
-                    .offset(x = shift)
-                    .size(22.dp)
-                    .background(Color.White, CircleShape),
-            )
-        }
-    }
+    DshaSwitch(checked, onChange, Modifier.semantics { contentDescription = label })
 }
 
 @Composable
@@ -152,12 +141,16 @@ internal fun PromptCard(
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
+    val interactions = remember { MutableInteractionSource() }
+    val haptics = rememberUiHaptics()
     Column(
         modifier
-            .clip(ContinuousShape(20.dp))
-            .background(Color.White)
+            .dshaPressFeedback(interactions, Color.White, ContinuousShape(20.dp))
             .border(1.dp, WhaleLine, ContinuousShape(20.dp))
-            .clickable(onClick = onClick)
+            .clickable(interactionSource = interactions, indication = null, role = Role.Button) {
+                haptics.perform(UiHaptic.Selection)
+                onClick()
+            }
             .padding(15.dp),
     ) {
         Box(
@@ -225,9 +218,9 @@ internal fun WhaleSheet(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     CenterIsland(close) {
-        Column(Modifier.verticalScroll(rememberScrollState()).padding(20.dp)) {
+        Column(Modifier.padding(18.dp)) {
             Row(
-                Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                Modifier.fillMaxWidth().heightIn(min = 52.dp).padding(bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
@@ -236,8 +229,8 @@ internal fun WhaleSheet(
                     fontSize = 18.sp,
                     fontWeight = FontWeight.SemiBold,
                 )
-                IconButton(onClick = close, modifier = Modifier.size(32.dp)) {
-                    Icon(AppIcons.Close, "关闭面板", Modifier.size(18.dp), tint = WhaleMuted)
+                DshaIconButton("关闭面板", close, size = 44.dp, glass = true) {
+                    Icon(AppIcons.Close, null, Modifier.size(18.dp), tint = WhaleMuted)
                 }
             }
             if (detail.isNotEmpty())
@@ -248,7 +241,14 @@ internal fun WhaleSheet(
                     color = WhaleMuted,
                     modifier = Modifier.padding(bottom = 14.dp),
                 )
-            content()
+            val scroll = rememberScrollState()
+            CompositionLocalProvider(LocalMenuOwnerScroll provides scroll) {
+                Column(
+                    Modifier.weight(1f, fill = false).verticalScroll(scroll),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    content = content,
+                )
+            }
         }
     }
 }

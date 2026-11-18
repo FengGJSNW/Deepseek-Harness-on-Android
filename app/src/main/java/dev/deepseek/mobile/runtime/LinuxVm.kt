@@ -23,6 +23,9 @@ import org.json.JSONObject
 internal class LinuxVm(
     private val context: Context,
     private val directory: File,
+    private val sharedBase: File? = null,
+    publicNetworkOnly: Boolean = false,
+    private val release: AlpineRelease = AlpineRelease.V324,
     private val networkAllowed: () -> Boolean = { true },
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -38,8 +41,8 @@ internal class LinuxVm(
     private var stateOffset = 0L
     private val state = AtomicFile(File(directory, "machine.state"))
     private val network =
-        RuntimeNetwork(scope, networkAllowed, ::send) {
-            dev.deepseek.mobile.proxy.MihomoManager.get(context).terminalPort()
+        RuntimeNetwork(scope, networkAllowed, ::send, publicNetworkOnly) {
+            dev.deepseek.mobile.proxy.FlClashRuntime.get(context).terminalPort()
         }
     var onPty: (String, ByteArray) -> Unit = { _, _ -> }
     var onPtyExit: (String, Int) -> Unit = { _, _ -> }
@@ -50,14 +53,20 @@ internal class LinuxVm(
     var failed = ""
         private set
 
-    suspend fun start(): JSONObject {
-        RuntimeArtifacts.ensure(context)
+    suspend fun start(progress: (String) -> Unit = {}): JSONObject {
+        RuntimeArtifacts.ensure(context, progress, release)
+        progress("启动虚拟机并等待 Shell 就绪")
         withContext(Dispatchers.Main.immediate) { createView() }
         withTimeout(30000) { pageReady.await() }
         send(
             JSONObject()
                 .put("type", "boot")
-                .put("restore", withContext(Dispatchers.IO) { state.baseFile.isFile }),
+                .put(
+                    "restore",
+                    withContext(Dispatchers.IO) {
+                        state.baseFile.isFile || sharedBase?.isFile == true
+                    },
+                ),
         )
         val result = withTimeout(90000) { bootReady.await() }
         if (result.optBoolean("restored")) {
@@ -143,14 +152,21 @@ internal class LinuxVm(
                                             context.assets.open("linux/dsha-guest")
                                         "/runtime/kernel.bin",
                                         "/runtime/seabios.bin",
-                                        "/runtime/vgabios.bin",
-                                        "/runtime/alpine.tar.gz" ->
+                                        "/runtime/vgabios.bin" ->
                                             File(
                                                     RuntimeArtifacts.directory(context),
                                                     path.substringAfterLast('/'),
                                                 )
                                                 .inputStream()
-                                        "/runtime/state.bin" -> state.openRead()
+                                        "/runtime/alpine.tar.gz" ->
+                                            File(
+                                                    RuntimeArtifacts.directory(context),
+                                                    release.artifact().name,
+                                                )
+                                                .inputStream()
+                                        "/runtime/state.bin" ->
+                                            if (state.baseFile.isFile) state.openRead()
+                                            else requireNotNull(sharedBase).inputStream()
                                         else -> return refuse()
                                     }
                                 val mime =
@@ -307,9 +323,11 @@ internal class LinuxVm(
         onStarted: () -> Unit = {},
         onOutput: (String, String) -> Unit = { _, _ -> },
         useMihomo: Boolean = false,
+        preparingBase: Boolean = false,
     ): JSONObject = commandLock.withLock {
         require(command.isNotBlank() && command.length <= 16384)
-        val proxy = if (useMihomo) dev.deepseek.mobile.proxy.MihomoManager.get(context) else null
+        val budget = timeout.coerceIn(1, if (preparingBase) 900 else 300)
+        val proxy = if (useMihomo) dev.deepseek.mobile.proxy.FlClashRuntime.get(context) else null
         val shell =
             dev.deepseek.mobile.proxy.MihomoManager.withProxyEnvironment(
                 command,
@@ -328,9 +346,9 @@ internal class LinuxVm(
                         .put("cwd", cwd)
                         .put("root", root)
                         .put("tree", tree)
-                        .put("timeout", timeout.coerceIn(1, 300) * 1000)
+                        .put("timeout", budget * 1000)
                         .put("limit", limit),
-                    timeout.coerceIn(1, 300) * 1000L + 10000,
+                    budget * 1000L + 10000,
                     id = id,
                 )
             } catch (error: CancellationException) {

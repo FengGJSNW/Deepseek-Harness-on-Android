@@ -22,6 +22,7 @@ import android.webkit.WebViewClient
 import dev.deepseek.mobile.harness.Capability
 import dev.deepseek.mobile.harness.PermissionEffect
 import dev.deepseek.mobile.terminal.*
+import dev.deepseek.mobile.workflow.*
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.net.HttpURLConnection
@@ -35,6 +36,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -48,6 +50,11 @@ class AgentService : Service() {
     companion object {
         @Volatile var current: AgentService? = null
         const val ORIGIN = "https://appassets.androidplatform.net"
+        private val reviewFollowUp =
+            Regex(
+                "(?:继续(?:吧|刚才的任务)?|接着做|(?:重启会话)?再试(?:试|一次|一遍)?|重试(?:一下)?|retry|try again|continue)[。.!！\\s]*",
+                RegexOption.IGNORE_CASE,
+            )
     }
 
     lateinit var webView: WebView
@@ -62,6 +69,7 @@ class AgentService : Service() {
     @Volatile private var credentialRevision = 0L
     private var balanceAttemptAt = -60000L
     private lateinit var floating: FloatingControl
+    private var sandboxProtection: SandboxBackgroundProtection? = null
     private var approval: CompletableDeferred<Boolean>? = null
     private val approvalLock = Mutex()
     private val startHookLock = Mutex()
@@ -88,6 +96,10 @@ class AgentService : Service() {
         keys = KeyStore(this)
         AssistantState.initialize(this)
         terminal = TerminalManager(this, ::reviewOperation, ::approveTerminal)
+        terminal.connections.restoreSelected(
+            dev.deepseek.mobile.terminal.TerminalLevel.of(AssistantState.current.terminalLevel),
+            AssistantState.current.terminalEnabled,
+        )
         memories = MemoryStore(this)
         browser = AgentBrowser(this)
         changes = ChangeTracker(this)
@@ -112,6 +124,7 @@ class AgentService : Service() {
             .createNotificationChannel(
                 NotificationChannel("task-review", "任务审查与提问", NotificationManager.IMPORTANCE_HIGH),
             )
+        sandboxProtection = SandboxBackgroundProtection(this, scope, terminal.connections)
         loadEngine()
     }
 
@@ -252,6 +265,15 @@ class AgentService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         intent?.getStringExtra("sessionId")?.let { AssistantState.select(it) }
+        if (
+            intent?.action in
+                setOf(SandboxBackgroundProtection.Restart, SandboxBackgroundProtection.Stop)
+        ) {
+            sandboxProtection?.command(
+                intent?.action.orEmpty(),
+                intent?.getStringExtra("sandboxId").orEmpty(),
+            )
+        }
         refreshFloating()
         if (intent?.action == "STOP") {
             stopTask()
@@ -412,9 +434,29 @@ class AgentService : Service() {
 
     private fun phone() = PhoneAccessibility.current ?: error("请先在系统设置中开启“DSHA 手机助手”无障碍服务")
 
-    private val mihomo by lazy { dev.deepseek.mobile.proxy.MihomoManager.get(this) }
+    private val flclash by lazy { dev.deepseek.mobile.proxy.FlClashRuntime.get(this) }
 
-    private val taskMethods =
+    private val sandboxes by lazy { dev.deepseek.mobile.runtime.SandboxManager.get(this) }
+    private val memoryOperations =
+        setOf("memory_read", "memory_write", "memory_search", "context_search", "context_read")
+    private val sandboxOperations =
+        setOf(
+            "terminal_status",
+            "terminal_exec",
+            "workspace_list",
+            "workspace_read",
+            "workspace_write",
+            "publish_file",
+        )
+
+    private val workflowPolicy by lazy {
+        WorkflowPolicy(assets.open("workflow-policy.json").bufferedReader().use { it.readText() })
+    }
+    private val workspaceFileLock = kotlinx.coroutines.sync.Mutex()
+
+    // Service construction precedes Context attachment. Do not force the asset-backed policy
+    // from a field initializer; the bridge first uses this set after onCreate/loadEngine.
+    private val taskMethods by lazy {
         setOf(
             "complete",
             "image",
@@ -433,6 +475,8 @@ class AgentService : Service() {
             "workspace_write",
             "terminal_exec",
             "terminal_elevate",
+            "sandbox_list",
+            "sandbox_connect",
             "toolchain_install",
             "mcp_list",
             "mcp_call",
@@ -459,7 +503,8 @@ class AgentService : Service() {
             "browser_act",
             "browser_search",
             "browser_fetch",
-        )
+        ) + workflowPolicy.tools
+    }
 
     inner class Bridge {
         @JavascriptInterface
@@ -474,12 +519,13 @@ class AgentService : Service() {
                 return
             }
             val epoch = generation
-            val mapId = if (method in taskMethods) "task-$id" else id
+            val taskRequest = method in taskMethods || method == "image_recognition"
+            val mapId = if (taskRequest) "task-$id" else id
             val job =
                 scope.launch(start = kotlinx.coroutines.CoroutineStart.LAZY) {
                     try {
                         val args = JSONObject(json)
-                        if (method in taskMethods) assertActive(epoch)
+                        if (taskRequest) assertActive(epoch)
                         val value =
                             if (
                                 method in
@@ -495,7 +541,7 @@ class AgentService : Service() {
                             )
                                 phoneLock.withLock { dispatch(method, args, id, epoch) }
                             else dispatch(method, args, id, epoch)
-                        if (method in taskMethods) assertActive(epoch)
+                        if (taskRequest) assertActive(epoch)
                         resolve(id, value)
                     } catch (error: CancellationException) {
                         resolve(id, null, "操作已取消，任务已停止")
@@ -603,11 +649,16 @@ class AgentService : Service() {
             toast("图片附件请切换至 Flash")
             return SendResult.UNSUPPORTED
         }
-        val actual = text.ifBlank { if (c.files.isNotEmpty()) "请查看这些附件" else "请描述这些图片" }
+        val allowedSandboxes =
+            sandboxes.records.value.filter { it.allows(c.id, c.projectId) }.map { it.id }.toSet()
+        if (c.sandboxEnabled && allowedSandboxes.isEmpty()) {
+            toast("请先在右侧工作区允许此会话访问至少一个 Sandbox")
+            return SendResult.UNSUPPORTED
+        }
         val t =
             PhoneTask(
                 sessionId = c.id,
-                text = actual,
+                text = text,
                 images = c.images.toList(),
                 model = c.model,
                 effort = c.effort,
@@ -617,22 +668,82 @@ class AgentService : Service() {
                 phoneTools = c.phoneTools,
                 fileTools = c.fileTools,
                 workspace = c.workspace,
-                terminalEnabled = c.terminalEnabled,
-                terminalConfig = terminal.config.load(c.terminalLevel).json().toString(),
+                terminalEnabled = c.terminalEnabled || c.sandboxEnabled,
+                terminalConfig =
+                    terminal.config
+                        .load(if (c.sandboxEnabled) "sandbox" else c.terminalLevel)
+                        .json()
+                        .toString(),
+                sandboxId =
+                    if (c.sandboxEnabled)
+                        c.sandboxId.takeIf { it in allowedSandboxes } ?: allowedSandboxes.first()
+                    else "",
+                sandboxIds = allowedSandboxes,
+                sandboxOnly = c.sandboxEnabled,
                 projectId = c.projectId,
                 files = c.files.toList(),
                 browserProvider = ExperienceSettings.browserMode.key,
                 creatorMode = c.creatorMode,
+                workMode = c.workMode,
             )
-        if (c.messages.isEmpty()) c.title = actual.take(24)
-        c.messages.add(ChatEntry("user", actual, t.images, t.files, t.id))
+        t.workPlan = c.workPlan
+        val firstMessage = c.messages.isEmpty()
+        if (firstMessage) c.title = ConversationTitles.initial(text, t.images.isNotEmpty())
+        c.messages.add(ChatEntry("user", text, t.images, t.files, t.id))
         c.files.clear()
         c.images.clear()
         c.draft = ""
         AssistantState.tasks.add(t)
         AssistantState.persist()
         pump()
+        if (firstMessage) generateConversationTitle(c, t)
         return SendResult.QUEUED
+    }
+
+    private fun generateConversationTitle(conversation: Conversation, task: PhoneTask) {
+        if (conversation.titleGenerationAttempted) return
+        conversation.titleGenerationAttempted = true
+        val revision = conversation.titleRevision
+        val requestId = "title-${task.id}"
+        AssistantState.persist()
+        scope.launch {
+            try {
+                val reply =
+                    complete(
+                        ConversationTitles.request(task.text, task.images.size, task.files.size),
+                        requestId,
+                        null,
+                        timeoutMillis = 25_000,
+                    )
+                ensureActive()
+                // A response belongs to this session even if the user is now in another one.
+                if (AssistantState.sessions.none { it === conversation }) return@launch
+                reply.optJSONObject("usage")?.let { usage ->
+                    val tokens =
+                        usage
+                            .optInt(
+                                "total_tokens",
+                                usage.optInt("prompt_tokens") + usage.optInt("completion_tokens"),
+                            )
+                            .coerceAtLeast(0)
+                    conversation.usage =
+                        conversation.usage.copy(
+                            total = conversation.usage.total + tokens,
+                            requests = conversation.usage.requests + 1,
+                        )
+                    AssistantState.totalTokens += tokens
+                }
+                val title = ConversationTitles.result(reply)
+                ConversationTitles.apply(conversation, revision, title)
+                AssistantState.persist()
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (_: Exception) {
+                // Keep the original message prefix; a title request never interrupts chat.
+            } finally {
+                connections.remove(requestId)?.disconnect()
+            }
+        }
     }
 
     fun resumeQueue() {
@@ -685,13 +796,13 @@ class AgentService : Service() {
         floating.update()
         scope.launch {
             try {
-                changes.begin(task)
+                if (!task.sandboxOnly) changes.begin(task)
             } catch (error: Exception) {
                 AssistantState.error = "文件改动基线读取失败：${safeMessage(error)}"
             }
             if (AssistantState.activeTaskId == task.id && task.status == "running")
                 webView.evaluateJavascript(
-                    "window.runTask(${task.json().put("browserTools", ExperienceSettings.browserEnabled).put("maxAgents", ExperienceSettings.maxAgents).put("proxyTools", mihomo.state.value.let { it.agentStart || it.agentNodes || it.agentRules })})",
+                    "window.runTask(${task.json().put("browserTools", ExperienceSettings.browserEnabled).put("memoryEnabled", ExperienceSettings.memoryEnabled).put("maxAgents", ExperienceSettings.maxAgents).put("proxyTools", flclash.policy.state.value.enabled)})",
                     null,
                 )
         }
@@ -744,6 +855,24 @@ class AgentService : Service() {
                                 "total_tokens",
                                 v.optInt("prompt_tokens") + v.optInt("completion_tokens"),
                             )
+                        c.usage = c.usage.record(v, t.model)
+                        t.tokens += n
+                        AssistantState.totalTokens += n
+                    }
+                    "image_index_usage" -> {
+                        val usage = e.getJSONObject("value")
+                        val n =
+                            usage
+                                .optInt(
+                                    "total_tokens",
+                                    usage.optInt("prompt_tokens") +
+                                        usage.optInt("completion_tokens"),
+                                )
+                                .coerceAtLeast(0)
+                        // Background recognition contributes cost, not the active chat's context
+                        // size.
+                        c.usage =
+                            c.usage.copy(total = c.usage.total + n, requests = c.usage.requests + 1)
                         t.tokens += n
                         AssistantState.totalTokens += n
                     }
@@ -771,22 +900,24 @@ class AgentService : Service() {
                 if (e.optString("taskId") != t.id) return
                 scope.launch {
                     try {
-                        terminal.harness.extensions.hooks(
-                            t,
-                            dev.deepseek.mobile.harness.HookEvent.AfterAgentFinish,
-                        ) { reason, detail ->
-                            extensionApproval(t, generation, reason, detail)
-                        }
+                        if (!t.sandboxOnly)
+                            terminal.harness.extensions.hooks(
+                                t,
+                                dev.deepseek.mobile.harness.HookEvent.AfterAgentFinish,
+                            ) { reason, detail ->
+                                extensionApproval(t, generation, reason, detail)
+                            }
                     } catch (error: Exception) {
                         AssistantState.error = "后置 Hook 未完成：${safeMessage(error)}"
                     }
                     try {
-                        changes.finish(t)
+                        if (!t.sandboxOnly) changes.finish(t)
                         withContext(Dispatchers.IO) {
-                            terminal.harness.contexts.complete(
-                                t,
-                                if (e.optBoolean("failed")) "error" else "done",
-                            )
+                            if (ExperienceSettings.memoryEnabled && !t.sandboxOnly)
+                                terminal.harness.contexts.complete(
+                                    t,
+                                    if (e.optBoolean("failed")) "error" else "done",
+                                )
                         }
                     } catch (error: Exception) {
                         AssistantState.error = "文件改动记录未能保存：${safeMessage(error)}"
@@ -807,6 +938,7 @@ class AgentService : Service() {
     }
 
     private fun finishTask(t: PhoneTask, e: JSONObject) {
+        sandboxes.finish(t.id)
         startHookContexts.remove(t.id)
         if (AssistantState.activeTaskId != t.id) return
         AssistantState.sessions
@@ -873,13 +1005,19 @@ class AgentService : Service() {
             "workspace_list" to "列出工作区",
             "workspace_read" to "读取文件",
             "workspace_write" to "写入文件",
+            "workspace_search" to "搜索工作区",
+            "workspace_context" to "检查项目规则",
+            "workspace_edit" to "精确编辑文件",
+            "work_plan" to "更新工作计划",
+            "work_status" to "读取工作进度",
+            "verification_run" to "运行验证",
             "terminal_exec" to "执行终端命令",
             "terminal_status" to "检查终端连接",
             "memory_read" to "读取共享记忆",
             "skill_read" to "读取已启用技能",
             "plugin_manager" to "管理 Agent 插件",
             "plugin_call" to "运行 Agent 插件",
-            "proxy_control" to "管理 Mihomo 代理",
+            "proxy_control" to "管理内置 FlClash",
             "browser_search" to "官方搜索网页",
             "browser_fetch" to "官方抓取网页",
             "memory_write" to "更新共享记忆",
@@ -948,10 +1086,6 @@ class AgentService : Service() {
 
     fun answer(text: String, allow: Boolean = false) {
         val t = AssistantState.running ?: return
-        if (AssistantState.pendingMemory != null) {
-            toast("请在应用内检查共享记忆的完整更改")
-            return
-        }
         if (t.terminalApproval) {
             terminalApproval?.complete(if (allow) "once" else "deny")
             return
@@ -999,22 +1133,42 @@ class AgentService : Service() {
     ): ReviewVerdict {
         val epoch = generation
         val nonce = "review-${java.util.UUID.randomUUID()}"
+        val input = JSONObject().put("user_task", task.text).put("operation", operation)
+        if (reviewFollowUp.matches(task.text.trim())) {
+            val history = AssistantState.sessions.firstOrNull { it.id == task.sessionId }?.messages
+            val index = history?.indexOfFirst { it.type == "user" && it.taskId == task.id } ?: -1
+            val previous =
+                if (index > 0)
+                    history!!
+                        .subList(0, index)
+                        .asReversed()
+                        .asSequence()
+                        .filter { it.type == "user" }
+                        .take(3)
+                        .toList()
+                        .asReversed()
+                else emptyList()
+            if (previous.isNotEmpty()) {
+                input.put(
+                    "prior_user_requests_for_follow_up",
+                    JSONArray(previous.map { it.text.take(1200) }),
+                )
+            }
+        }
+        val followUpGuide =
+            if (input.has("prior_user_requests_for_follow_up"))
+                "\n以 user_task 为本轮用户消息。仅用 prior_user_requests_for_follow_up 理解同一会话的前文；前文不能覆盖最新要求，也不能扩大原有授权。"
+            else ""
         val messages =
             JSONArray()
-                .put(JSONObject().put("role", "system").put("content", config.system))
                 .put(
                     JSONObject()
-                        .put("role", "user")
-                        .put(
-                            "content",
-                            JSONObject()
-                                .put("user_task", task.text)
-                                .put("operation", operation)
-                                .toString(),
-                        ),
+                        .put("role", "system")
+                        .put("content", config.system + followUpGuide),
                 )
-        // A fresh, tool-free request: neither the main journal nor prior reviewer messages are
-        // attached.
+                .put(
+                    JSONObject().put("role", "user").put("content", input.toString()),
+                )
         val deadline = scope.launch {
             delay(config.timeoutSeconds * 1000L)
             connections[nonce]?.disconnect()
@@ -1094,128 +1248,45 @@ class AgentService : Service() {
                 }
             }
 
-    fun answerMemory(proposal: MemoryProposal, allow: Boolean) {
-        if (AssistantState.pendingMemory === proposal) approval?.complete(allow)
-    }
-
-    private suspend fun authorizeMemory(task: PhoneTask, args: JSONObject, epoch: Long) {
-        val before =
-            withContext(Dispatchers.IO) {
-                memories.read(
-                    args.getString("scope"),
-                    if (args.getString("scope") == "session") task.sessionId else task.projectId,
-                )
-            }
-        val after = args.getString("text")
-        require(after.toByteArray(Charsets.UTF_8).size <= MemoryStore.MAX_BYTES) { "记忆最多 32KB" }
-        check(
-            terminal.harness.permissions
-                .evaluate(
-                    terminal.harness.context(task),
-                    dev.deepseek.mobile.harness.Capability.MEMORY_READ,
-                    dev.deepseek.mobile.harness.ContextManager.memoryResource(
-                        before.scope,
-                        task.sessionId,
-                        task.projectId,
-                    ),
-                )
-                .effect == dev.deepseek.mobile.harness.PermissionEffect.ALLOW,
-        ) {
-            "读取该记忆未获允许，不能把旧内容交给审查 Agent"
-        }
-        check(before.sha256 == args.getString("expected_sha256")) { "记忆版本已改变，请重新读取并合并" }
-        val permission =
-            terminal.harness.permissions.evaluate(
-                terminal.harness.context(task),
+    private fun authorizeMemory(task: PhoneTask, args: JSONObject) {
+        val scope = args.getString("scope")
+        require(scope == "global" || scope == "project" && task.projectId.isNotBlank())
+        val resource = if (scope == "project") "project:${task.projectId}" else scope
+        val permissions = terminal.harness.permissions
+        val caller = terminal.harness.context(task)
+        for (capability in
+            listOf(
+                dev.deepseek.mobile.harness.Capability.MEMORY_READ,
                 dev.deepseek.mobile.harness.Capability.MEMORY_WRITE,
-                dev.deepseek.mobile.harness.ContextManager.memoryResource(
-                    before.scope,
-                    task.sessionId,
-                    task.projectId,
-                ),
-            )
-        check(permission.effect != dev.deepseek.mobile.harness.PermissionEffect.DENY) {
-            permission.reason
+            )) {
+            val permission = permissions.evaluate(caller, capability, resource)
+            check(permission.effect == dev.deepseek.mobile.harness.PermissionEffect.ALLOW) {
+                "当前权限规则未授权自动更新此记忆：${permission.reason}"
+            }
         }
-        check(before.scope != "persona") { "人格与工作指令仅允许用户编辑" }
-        val global = before.scope == "global"
-        val sensitiveText =
-            Regex(
-                    "(?i)(sk-[a-z0-9_-]{16,}|-----BEGIN [A-Z ]*PRIVATE KEY|password\\s*[:=]\\s*[^\\s]{4,})",
-                )
-                .containsMatchIn(after)
-        if (
-            task.access == "full" &&
-                !global &&
-                !sensitiveText &&
-                permission.effect != dev.deepseek.mobile.harness.PermissionEffect.ASK
-        )
-            return
         val snapshot =
             if (task.terminalConfig.isNotEmpty())
                 TerminalSnapshot.from(JSONObject(task.terminalConfig))
             else terminal.config.load("isolated")
-        val inspection =
+        val target = memories.read(scope, task.projectId)
+        check(target.sha256 == args.getString("expected_sha256")) { "记忆版本已改变，请重新读取并合并" }
+        val decision =
             TerminalPolicy(snapshot.rules)
                 .inspectPaths(
-                    listOf(PathUse(before.logicalPath, "w")),
+                    listOf(PathUse(target.logicalPath, "w")),
                     "/dev.deepseek.mobile/workplace/session_${task.sessionId}",
                 )
-        check(inspection.decision != RuleDecision.DENY) {
-            "记忆写入被路径规则禁止：${inspection.reasons.joinToString()}"
-        }
-        val verdict =
-            if (task.access == "full") ReviewVerdict(RuleDecision.ALLOW, "当前执行权限允许")
-            else
-                reviewOperation(
-                    task,
-                    JSONObject()
-                        .put("kind", "shared_memory_write")
-                        .put("path", before.logicalPath)
-                        .put("before", before.text)
-                        .put("after", after)
-                        .put("static_decision", inspection.decision.name)
-                        .put("static_reasons", JSONArray(inspection.reasons)),
-                    ReviewerConfig.parse(snapshot.reviewer),
-                )
-        check(verdict.decision != RuleDecision.DENY) { "记忆写入未获审查员批准：${verdict.reason}" }
-        val needsHuman =
-            global ||
-                sensitiveText ||
-                permission.effect == dev.deepseek.mobile.harness.PermissionEffect.ASK ||
-                inspection.decision == RuleDecision.SENSITIVE ||
-                verdict.decision == RuleDecision.SENSITIVE
-        if (task.access == "auto") {
-            check(verdict.decision == RuleDecision.ALLOW && !needsHuman) { "此记忆更新需要用户确认；替我审批模式不写入" }
-            return
-        }
-        if (!needsHuman) return
-        check(task.access != "full") { "此共享记忆更新需要独立确认，已留在记忆提案中" }
-        approvalLock.withLock {
-            assertActive(epoch)
-            val pending = CompletableDeferred<Boolean>()
-            val proposal = MemoryProposal(task.id, before, after)
-            approval = pending
-            AssistantState.pendingMemory = proposal
-            task.approval = true
-            task.status = "waiting"
-            task.question = "更新 ${before.filename}"
-            task.progress = "等待共享记忆授权"
-            notifyEvent(task, "共享记忆更新等待确认：${before.filename}")
-            try {
-                check(withTimeout(600000) { pending.await() }) { "用户拒绝共享记忆更新" }
-                assertActive(epoch)
-            } finally {
-                if (AssistantState.pendingMemory === proposal) AssistantState.pendingMemory = null
-                if (approval === pending) approval = null
-                task.approval = false
-                task.question = ""
-                if (task.status == "waiting") task.status = "running"
-            }
+        check(decision.decision == RuleDecision.ALLOW) {
+            "权限规则未授权自动写入：${decision.reasons.joinToString()}"
         }
     }
 
-    private suspend fun authorize(method: String, args: JSONObject, epoch: Long) {
+    private suspend fun authorize(
+        method: String,
+        args: JSONObject,
+        epoch: Long,
+        sandboxId: String = "",
+    ) {
         val t =
             AssistantState.running
                 ?: return // Legacy instrumentation owns its explicitly-started task.
@@ -1232,6 +1303,11 @@ class AgentService : Service() {
             }
             return
         }
+        if (method.startsWith("memory_")) {
+            check(ExperienceSettings.memoryEnabled) { "用户已关闭记忆" }
+            if (method in setOf("memory_read", "memory_write"))
+                require(args.getString("scope") in setOf("global", "project", "persona"))
+        }
         val officialWeb = OfficialWebTool.fromMethod(method)
         val browser = method.startsWith("browser_")
         if (browser) {
@@ -1242,6 +1318,10 @@ class AgentService : Service() {
                 "当前浏览器档位没有启用此工具"
             }
         }
+        val permissionContext =
+            terminal.harness.context(t).let {
+                if (sandboxId.isBlank()) it else it.copy(environment = "sandbox")
+            }
         val officialRequest = officialWeb?.request(args)
         val capability =
             when {
@@ -1303,11 +1383,18 @@ class AgentService : Service() {
             val resources =
                 if (officialWeb == OfficialWebTool.FETCH)
                     listOf(officialWeb.endpoint, target).distinct()
+                else if (method == "workspace_list")
+                    listOf(
+                        "/workspace/" +
+                            dev.deepseek.mobile.harness.WorkspaceManager.directoryPath(
+                                args.optString("path"),
+                            ),
+                    )
                 else listOf(target)
             for (resource in resources) {
                 val result =
                     terminal.harness.permissions.evaluate(
-                        terminal.harness.context(t),
+                        permissionContext,
                         capability,
                         resource,
                     )
@@ -1322,7 +1409,7 @@ class AgentService : Service() {
                     requestCapability(t, result.reason, "$method · $resource", epoch)
                     check(
                         terminal.harness.permissions
-                            .evaluate(terminal.harness.context(t), capability, resource)
+                            .evaluate(permissionContext, capability, resource)
                             .effect != dev.deepseek.mobile.harness.PermissionEffect.DENY,
                     ) {
                         "等待期间权限规则改变，操作未执行"
@@ -1344,6 +1431,10 @@ class AgentService : Service() {
                 )
         )
             return
+        if (method in setOf("workspace_list", "workspace_read")) {
+            check(t.fileTools) { "本任务未启用工作区工具" }
+            return // Read-only exploration already passed the capability and path policy above.
+        }
         if (method == "publish_file") {
             check(if (args.optString("source") == "workspace") t.fileTools else t.terminalEnabled) {
                 "未启用对应文件工具"
@@ -1351,7 +1442,7 @@ class AgentService : Service() {
             return
         }
         if (method == "memory_write") {
-            authorizeMemory(t, args, epoch)
+            authorizeMemory(t, args)
             return
         }
         if (
@@ -1361,7 +1452,11 @@ class AgentService : Service() {
         )
             return
         if (method in setOf("terminal_exec", "terminal_status", "terminal_elevate")) {
-            check(t.terminalEnabled) { "本任务未启用终端" }
+            check(
+                t.terminalEnabled || sandboxId.isNotBlank() && sandboxId in t.sandboxIds.orEmpty(),
+            ) {
+                "本任务未启用此终端"
+            }
             return
         }
         if (!browser) {
@@ -1488,6 +1583,83 @@ class AgentService : Service() {
         epoch: Long,
     ): Any {
         val task = AssistantState.running
+        if (task != null) {
+            if (method in taskMethods) workflowPolicy.requireAllowed(task.workMode, method)
+            if (method in workflowPolicy.tools) {
+                check(task.access !in setOf("none", "read")) { "完全禁止模式的执行工具已关闭" }
+                terminal.harness.worktreeId(task, original)
+                if (method in workflowPolicy.workspaceTools) {
+                    check(task.fileTools) { "文件工具未开启" }
+                    return WorkspaceTools { operation, arguments ->
+                            dispatch(operation, arguments, "$id-$operation", epoch) as JSONObject
+                        }
+                        .run(method, original)
+                }
+                return workflowOperation(task, method, original, id, epoch)
+            }
+            check(ExperienceSettings.memoryEnabled || method !in memoryOperations) { "记忆已关闭" }
+            val requested = original.optString("sandbox_id")
+            if (task.sandboxOnly && method in taskMethods) {
+                check(
+                    method in sandboxOperations ||
+                        method in
+                            setOf(
+                                "complete",
+                                "ask_user",
+                                "wait",
+                                "image",
+                                "sandbox_list",
+                                "sandbox_connect",
+                            ),
+                ) {
+                    "当前任务受 Sandbox 约束，不能调用 $method"
+                }
+                if (method == "image")
+                    check(original.optString("id") in task.images) { "只能读取本轮上传的图片" }
+                check(requested.isBlank() || task.acceptsSandbox(requested)) {
+                    "此 Sandbox 不在本任务获准访问的范围内"
+                }
+            }
+            if (method in setOf("sandbox_list", "sandbox_connect")) {
+                check(
+                    task.access !in setOf("none", "read") &&
+                        (task.terminalEnabled || task.hasSandboxAccess),
+                )
+                if (method == "sandbox_connect")
+                    return sandboxes.connect(original.getString("sandbox_id"), task)
+                val session =
+                    AssistantState.sessions.firstOrNull { it.id == task.sessionId }
+                        ?: error("会话已删除")
+                return JSONObject()
+                    .put(
+                        "sandboxes",
+                        JSONArray(
+                            sandboxes.records.value
+                                .filter {
+                                    task.acceptsSandbox(it.id) &&
+                                        it.allows(session.id, session.projectId)
+                                }
+                                .map { sandboxes.describe(it, task) },
+                        ),
+                    )
+            }
+            if (method in sandboxOperations) {
+                val target = requested.ifBlank { task.sandboxId }
+                if (target.isNotBlank()) {
+                    check(
+                        (task.terminalEnabled || target in task.sandboxIds.orEmpty()) &&
+                            task.access !in setOf("none", "read"),
+                    )
+                    check(sandboxes.isConnected(target, task)) {
+                        "请先调用 sandbox_connect 连接此 Sandbox"
+                    }
+                    return sandboxes.withAccess(target, task) {
+                        dispatchRaw(method, original, id, epoch, target)
+                    }
+                }
+                check(!task.sandboxOnly) { "Only Sandbox 不能回退到手机终端或本机工作区" }
+            }
+        }
         val events = dev.deepseek.mobile.harness.HookEvent.entries
         if (
             task == null ||
@@ -1517,34 +1689,9 @@ class AgentService : Service() {
                 else -> null
             }
         if (special != null) args = hook(special, args).arguments
+        if (method == "workspace_write") WorkspaceText.checkPreparedWrite(original, args)
         // The modified operation passes the complete normal permission and command review again.
-        val proposal =
-            if (method == "memory_write")
-                withContext(Dispatchers.IO) {
-                    val scope = args.getString("scope")
-                    val before =
-                        memories.read(
-                            scope,
-                            if (scope == "session") task.sessionId else task.projectId,
-                        )
-                    terminal.harness.contexts.recordProposal(task, before, args.getString("text"))
-                }
-            else null
-        val result =
-            try {
-                dispatchRaw(method, args, id, epoch).also {
-                    if (proposal != null)
-                        terminal.harness.contexts.settleProposal(proposal, "applied")
-                }
-            } catch (error: Throwable) {
-                if (proposal != null)
-                    terminal.harness.contexts.settleProposal(
-                        proposal,
-                        if (error is kotlinx.coroutines.CancellationException) "interrupted"
-                        else if (error.message.orEmpty().contains("版本")) "conflicted" else "denied",
-                    )
-                throw error
-            }
+        val result = dispatchRaw(method, args, id, epoch)
         val json = result as? JSONObject
         try {
             if (special != null) hook(events[events.indexOf(special) + 1], args, json)
@@ -1564,13 +1711,88 @@ class AgentService : Service() {
         return result
     }
 
+    private suspend fun workflowOperation(
+        task: PhoneTask,
+        method: String,
+        args: JSONObject,
+        id: String,
+        epoch: Long,
+    ): JSONObject {
+        when (method) {
+            "work_status" -> return task.workflowSnapshot()
+            "work_plan" -> {
+                check(args.optString("_agentId").isBlank()) { "子 Agent 不能替换主任务计划" }
+                task.workPlan = task.workPlan.update(JSONObject(args.toString()))
+                AssistantState.sessions.firstOrNull { it.id == task.sessionId }?.workPlan =
+                    task.workPlan
+                AssistantState.persist()
+                return task.workflowSnapshot()
+            }
+            "verification_run" -> {
+                val label = args.getString("label").trim().also { require(it.length in 1..120) }
+                val command = args.getString("command")
+                val pending =
+                    VerificationRecord(
+                        label,
+                        "",
+                        command.take(4000),
+                        "running",
+                        null,
+                        "",
+                        System.currentTimeMillis(),
+                    )
+                task.verifications.add(pending)
+                while (task.verifications.size > 40) task.verifications.removeAt(0)
+                AssistantState.persist()
+                fun settle(record: VerificationRecord) {
+                    val index = task.verifications.indexOfFirst { it.id == pending.id }
+                    if (index >= 0)
+                        task.verifications[index] =
+                            record.copy(id = pending.id, createdAt = pending.createdAt)
+                    AssistantState.persist()
+                }
+                val forwarded = JSONObject(args.toString()).apply { remove("label") }
+                val result =
+                    try {
+                        (dispatch("terminal_exec", forwarded, "$id-verify", epoch) as JSONObject)
+                            .also { assertActive(epoch) }
+                    } catch (error: CancellationException) {
+                        withContext(
+                            kotlinx.coroutines.NonCancellable + Dispatchers.Main.immediate,
+                        ) {
+                            settle(pending.copy(outcome = "cancelled", detail = "任务已停止，验证未完成"))
+                        }
+                        throw error
+                    } catch (error: Exception) {
+                        JSONObject()
+                            .put("executionStarted", false)
+                            .put("reason", safeMessage(error))
+                    }
+                val record =
+                    VerificationRecord.measured(label, command, result, pending.createdAt)
+                        .copy(id = pending.id)
+                settle(record)
+                return JSONObject()
+                    .put("verification", record.json())
+                    .put("result", result)
+                    .put(
+                        "message",
+                        if (record.outcome == "passed") "命令正常退出；仍需审查验证范围" else "验证未通过；请检查实际结果",
+                    )
+            }
+
+            else -> error("未知工作流程操作")
+        }
+    }
+
     private suspend fun dispatchRaw(
         method: String,
         args: JSONObject,
         id: String,
         epoch: Long,
+        sandboxId: String = "",
     ): Any {
-        if (method in taskMethods) authorize(method, args, epoch)
+        if (method in taskMethods) authorize(method, args, epoch, sandboxId)
         if (
             method in
                 setOf("observe", "tap", "long_press", "swipe", "input_text", "global_action") &&
@@ -1606,6 +1828,26 @@ class AgentService : Service() {
                     check(args.getString("sessionId") == task.sessionId) { "会话已切换" }
                     val store = AttachmentStore(this@AgentService)
                     val array = JSONArray()
+                    if (task.sandboxOnly) {
+                        for (id in task.files.distinct()) {
+                            val info = store.get(id)
+                            check(info.sessionId == task.sessionId)
+                            array.put(
+                                JSONObject()
+                                    .put("name", info.name)
+                                    .put("id", id)
+                                    .put(
+                                        "guestPath",
+                                        "/workspace/" +
+                                            dev.deepseek.mobile.runtime.sandboxAttachmentPath(
+                                                id,
+                                                info.name,
+                                            ),
+                                    ),
+                            )
+                        }
+                        return@withContext JSONObject().put("files", array)
+                    }
                     var remaining = 100000
                     val recent =
                         AssistantState.sessions
@@ -1644,7 +1886,7 @@ class AgentService : Service() {
                     }
                     info.json().put("text", store.text(id))
                 }
-            "publish_file" -> publishFile(args)
+            "publish_file" -> publishFile(args, sandboxId)
             "plugin_manager" -> {
                 val task = AssistantState.running ?: error("任务已停止")
                 terminal.harness.plugins.manage(args, task, { assertActive(epoch) }) { title, detail
@@ -1671,33 +1913,41 @@ class AgentService : Service() {
                         args.optInt("offset"),
                     )
                 }
-            "proxy_control" -> mihomo.agent(args.getString("action"), args)
+            "proxy_control" -> flclash.agent(args.getString("action"), args)
             "memory_context" -> {
                 val task = AssistantState.running ?: error("没有运行中的会话")
                 require(args.getString("sessionId") == task.sessionId)
+                if (task.sandboxOnly) return JSONObject()
                 withContext(Dispatchers.IO) {
-                        terminal.harness.contexts.startup(task).also { data ->
-                            if (task.access !in setOf("none", "read")) {
-                                val policy = terminal.harness.context(task)
-                                runCatching { terminal.harness.plugins.catalog() }
-                                    .onSuccess {
-                                        data.put("plugins", it)
-                                    }
-                                data.put(
-                                    "skills",
-                                    terminal.harness.skills.catalog(task.projectId) { name ->
-                                        terminal.harness.permissions
-                                            .evaluate(
-                                                policy,
-                                                dev.deepseek.mobile.harness.Capability.SKILL_READ,
-                                                name,
-                                            )
-                                            .effect ==
-                                            dev.deepseek.mobile.harness.PermissionEffect.ALLOW
-                                    },
-                                )
+                        terminal.harness.contexts
+                            .startup(
+                                task,
+                                ExperienceSettings.memoryEnabled,
+                                args.optString("checkpoint"),
+                            )
+                            .also { data ->
+                                if (task.access !in setOf("none", "read")) {
+                                    val policy = terminal.harness.context(task)
+                                    runCatching { terminal.harness.plugins.catalog() }
+                                        .onSuccess {
+                                            data.put("plugins", it)
+                                        }
+                                    data.put(
+                                        "skills",
+                                        terminal.harness.skills.catalog(task.projectId) { name ->
+                                            terminal.harness.permissions
+                                                .evaluate(
+                                                    policy,
+                                                    dev.deepseek.mobile.harness.Capability
+                                                        .SKILL_READ,
+                                                    name,
+                                                )
+                                                .effect ==
+                                                dev.deepseek.mobile.harness.PermissionEffect.ALLOW
+                                        },
+                                    )
+                                }
                             }
-                        }
                     }
                     .also { startup ->
                         val extra = startHookLock.withLock {
@@ -1817,8 +2067,7 @@ class AgentService : Service() {
                     memories
                         .read(
                             args.getString("scope"),
-                            if (args.getString("scope") == "session") task.sessionId
-                            else task.projectId,
+                            task.projectId,
                         )
                         .json()
                 }
@@ -1828,8 +2077,7 @@ class AgentService : Service() {
                     memories
                         .write(
                             args.getString("scope"),
-                            if (args.getString("scope") == "session") task.sessionId
-                            else task.projectId,
+                            task.projectId,
                             args.getString("text"),
                             args.getString("expected_sha256"),
                         )
@@ -1850,11 +2098,27 @@ class AgentService : Service() {
                 )
             "terminal_status" -> {
                 val task = AssistantState.running ?: error("任务已停止")
+                if (sandboxId.isNotBlank()) {
+                    val description =
+                        sandboxes.describe(sandboxes.requireAccess(sandboxId, task), task)
+                    return description
+                        .put("selectedLevel", "sandbox")
+                        .put("access", task.access)
+                        .put(
+                            "connection",
+                            JSONObject().put("phase", description.optString("phase")),
+                        )
+                }
                 val level =
                     TerminalLevel.of(TerminalSnapshot.from(JSONObject(task.terminalConfig)).level)
                 terminal
                     .connectionStatus(level, args.optBoolean("probe"))
                     .put("access", task.access)
+                    .put("accessTitle", accessTitle(task.access))
+                    .put(
+                        "singleOperationElevationAvailable",
+                        level == TerminalLevel.SANDBOX && task.access == "ask",
+                    )
             }
             "toolchain_install" -> {
                 val task = AssistantState.running ?: error("任务已停止")
@@ -1969,7 +2233,12 @@ class AgentService : Service() {
             }
             "terminal_elevate" -> {
                 val task = AssistantState.running ?: error("任务已停止")
-                check(task.access == "ask") { "单次提权需要独立批准，请选择询问模式或手动设置终端级别" }
+                val selected =
+                    TerminalLevel.of(TerminalSnapshot.from(JSONObject(task.terminalConfig)).level)
+                check(selected == TerminalLevel.SANDBOX) {
+                    "当前会话已选择${selected.title}。请用 terminal_exec 在当前档位执行；如需切换档位，请由用户在终端菜单选择。"
+                }
+                check(task.access == "ask") { "当前审批模式不提供单次提权；请由用户在终端菜单选择所需档位" }
                 val level = args.getString("level")
                 require(level in setOf("app", "shell", "root_guarded", "root"))
                 val capability =
@@ -2009,11 +2278,17 @@ class AgentService : Service() {
                     terminal.harness.permissions.finish(policy)
                 }
             }
-            "terminal_exec" -> terminal.execute(AssistantState.running ?: error("任务已停止"), args)
+            "terminal_exec" ->
+                terminal.execute(
+                    AssistantState.running ?: error("任务已停止"),
+                    args,
+                    sandboxId = sandboxId,
+                )
             "session_load" ->
                 withContext(Dispatchers.IO) {
                     val sid = args.getString("sessionId")
                     require(sid.matches(Regex("[a-f0-9-]{36}")))
+                    AssistantState.running?.let { check(it.sessionId == sid) { "只能读取当前会话日志" } }
                     val f = File(filesDir, "events/$sid.json")
                     if (f.isFile) JSONArray(f.readText()) else JSONArray()
                 }
@@ -2055,6 +2330,17 @@ class AgentService : Service() {
                     }
                     JSONObject()
                 }
+            "image_recognition" -> {
+                val owner = AssistantState.running ?: error("任务已停止")
+                withContext(Dispatchers.IO) {
+                    val cacheJob = kotlinx.coroutines.currentCoroutineContext()
+                    ImageRecognitionStore(this@AgentService).exchange(owner, args) {
+                        cacheJob.ensureActive()
+                        assertActive(epoch)
+                        check(AssistantState.running?.id == owner.id) { "任务已切换" }
+                    }
+                }
+            }
             "attachment_refs" ->
                 JSONArray(
                     AssistantState.strings(args.optJSONArray("ids")).map { imageId ->
@@ -2069,17 +2355,21 @@ class AgentService : Service() {
             "workspace_read",
             "workspace_write" -> {
                 val task = AssistantState.running ?: error("任务已停止")
-                if (
-                    runCatching { JSONObject(task.terminalConfig).optString("level") }
-                        .getOrNull() == "sandbox"
-                )
-                    terminal.harness.runtimes.workspaceTool(
-                        task,
-                        method,
-                        args,
-                        terminal.harness.worktreeId(task, args),
+                val result =
+                    if (
+                        sandboxId.isNotBlank() ||
+                            runCatching { JSONObject(task.terminalConfig).optString("level") }
+                                .getOrNull() == "sandbox"
                     )
-                else workspace(method, args)
+                        terminal.harness.runtimes.workspaceTool(
+                            task,
+                            method,
+                            args,
+                            terminal.harness.worktreeId(task, args),
+                            sandboxId,
+                        )
+                    else workspace(method, args) as JSONObject
+                if (method == "workspace_read") WorkspaceText.window(result, args) else result
             }
             "balance" -> fetchBalance()
             "status" ->
@@ -2360,14 +2650,15 @@ class AgentService : Service() {
         }
     }
 
-    private suspend fun publishFile(args: JSONObject): JSONObject {
+    private suspend fun publishFile(args: JSONObject, sandboxId: String): JSONObject {
         val task = AssistantState.running ?: error("没有运行任务")
         val epoch = generation
         val store = AttachmentStore(this)
         val path = args.getString("path")
         val source = args.getString("source")
         val snapshot =
-            if (task.terminalConfig.isNotEmpty())
+            if (sandboxId.isNotBlank() && task.sandboxId.isBlank()) terminal.config.load("sandbox")
+            else if (task.terminalConfig.isNotEmpty())
                 TerminalSnapshot.from(JSONObject(task.terminalConfig))
             else terminal.config.load("isolated")
         val info =
@@ -2377,6 +2668,7 @@ class AgentService : Service() {
                         task,
                         path,
                         terminal.harness.worktreeId(task, args),
+                        sandboxId,
                     )
                 approvePublication(
                     task,
@@ -2543,53 +2835,88 @@ class AgentService : Service() {
     }
 
     private suspend fun workspace(method: String, args: JSONObject): Any =
-        withContext(Dispatchers.IO) {
-            val task = AssistantState.running ?: error("没有运行中的任务")
-            val tree =
-                androidx.documentfile.provider.DocumentFile.fromTreeUri(
-                    this@AgentService,
-                    android.net.Uri.parse(task.workspace),
-                ) ?: error("请先选择工作区")
-            if (method == "workspace_list")
-                return@withContext JSONObject()
-                    .put(
-                        "files",
-                        JSONArray(
-                            tree.listFiles().map {
-                                JSONObject()
-                                    .put("name", it.name)
-                                    .put("directory", it.isDirectory)
-                                    .put("bytes", it.length())
-                            },
-                        ),
-                    )
-            val name = args.getString("name")
-            require(
-                name.isNotBlank() &&
-                    name.length < 200 &&
-                    !name.contains('/') &&
-                    !name.contains('\\') &&
-                    name != ".." &&
-                    name != ".",
-            ) {
-                "仅支持所选目录内的单个文件名"
-            }
-            var file = tree.findFile(name)
-            if (method == "workspace_read") {
-                check(file != null && file.isFile) { "文件不存在" }
-                val bytes =
-                    contentResolver.openInputStream(file.uri)!!.use { readBounded(it, 100001) }
-                check(bytes.size <= 100000) { "文件超过 100KB" }
-                JSONObject().put("name", name).put("text", String(bytes, Charsets.UTF_8))
-            } else {
-                val text = args.getString("text")
-                require(text.toByteArray().size <= 100000) { "内容超过 100KB" }
-                if (file == null) file = tree.createFile("text/plain", name)
-                check(file != null && file.isFile) { "无法创建文件" }
-                contentResolver.openOutputStream(file.uri, "wt")!!.use {
-                    it.write(text.toByteArray())
+        workspaceFileLock.withLock {
+            withContext(Dispatchers.IO) {
+                val task = AssistantState.running ?: error("没有运行中的任务")
+                val root =
+                    androidx.documentfile.provider.DocumentFile.fromTreeUri(
+                        this@AgentService,
+                        android.net.Uri.parse(task.workspace),
+                    ) ?: error("请先选择工作区")
+                fun resolve(path: String): androidx.documentfile.provider.DocumentFile? {
+                    var file: androidx.documentfile.provider.DocumentFile? = root
+                    if (path.isNotEmpty())
+                        for (part in path.split('/')) {
+                            check(file?.isDirectory == true) { "上级目录不存在" }
+                            file = file?.findFile(part)
+                        }
+                    return file
                 }
-                JSONObject().put("message", "已写入 $name")
+                if (method == "workspace_list") {
+                    val path = WorkspaceText.path(args.optString("path"), rootAllowed = true)
+                    val directory = resolve(path)
+                    check(directory?.isDirectory == true) { "目录不存在" }
+                    val files = directory!!.listFiles().sortedBy { it.name }
+                    val offset = args.optInt("offset").coerceAtLeast(0)
+                    return@withContext JSONObject()
+                        .put(
+                            "files",
+                            JSONArray(
+                                files.drop(offset).take(250).map {
+                                    JSONObject()
+                                        .put("name", it.name)
+                                        .put("directory", it.isDirectory)
+                                        .put("bytes", it.length())
+                                },
+                            ),
+                        )
+                        .put("total", files.size)
+                        .put("offset", offset)
+                }
+                val name = WorkspaceText.path(args.getString("name"))
+                var file = resolve(name)
+                fun read(target: androidx.documentfile.provider.DocumentFile): String {
+                    check(target.isFile) { "请选择普通文件" }
+                    val bytes =
+                        contentResolver.openInputStream(target.uri)!!.use {
+                            readBounded(it, 100001)
+                        }
+                    check(bytes.size <= 100000) { "文件超过 100KB" }
+                    return Charsets.UTF_8.newDecoder()
+                        .decode(java.nio.ByteBuffer.wrap(bytes))
+                        .toString()
+                }
+                if (method == "workspace_read") {
+                    check(file != null) { "文件不存在" }
+                    val text = read(file!!)
+                    JSONObject()
+                        .put("name", name)
+                        .put("text", text)
+                        .put("sha256", WorkspaceText.hash(text))
+                } else {
+                    require(method == "workspace_write")
+                    val text = args.getString("text")
+                    require(text.toByteArray().size <= 100000) { "内容超过 100KB" }
+                    if (args.has("expected_sha256"))
+                        WorkspaceText.checkVersion(
+                            file?.let(::read),
+                            args.getString("expected_sha256"),
+                        )
+                    kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                    if (file == null) {
+                        val parent = resolve(name.substringBeforeLast('/', ""))
+                        check(parent?.isDirectory == true) { "请先创建上级目录" }
+                        file = parent!!.createFile("text/plain", name.substringAfterLast('/'))
+                    }
+                    check(file != null && file!!.isFile) { "无法创建文件" }
+                    contentResolver.openOutputStream(file!!.uri, "wt")!!.use {
+                        it.write(text.toByteArray())
+                    }
+                    JSONObject()
+                        .put("name", name)
+                        .put("sha256", WorkspaceText.hash(text))
+                        .put("message", "已写入 $name")
+                }
             }
         }
 
@@ -2844,85 +3171,148 @@ class AgentService : Service() {
             }
         }
 
-    fun exportBackup() = scope.launch {
-        runCatching {
-            AssistantState.persist()
-            TeamState.persist(this@AgentService)
-            withContext(Dispatchers.IO) {
-                AssistantState.awaitPersistence()
-                val output = java.io.ByteArrayOutputStream()
-                java.util.zip.ZipOutputStream(output).use { zip ->
-                    val dataRoot = filesDir.canonicalFile
-                    val snapshot = BackupSnapshot.capture(this@AgentService, dataRoot)
-                    val roots =
-                        listOf(
-                            "conversations-v3.json",
-                            "agents-v1.json",
-                            "changes-v1.json",
-                            "memory.md",
-                            "persona_memory.md",
-                            "projects",
-                            "sessions",
-                            "events",
-                            "attachments",
-                            "screens",
-                            "terminal/workplace",
-                        )
-                    var total = 0L
-                    roots.forEach { relative ->
-                        val root = File(dataRoot, relative)
-                        if (root.exists())
-                            root
-                                .walkTopDown()
-                                .filter {
-                                    it.isFile &&
-                                        it.canonicalFile == it.absoluteFile &&
-                                        snapshot.includes(it, dataRoot)
-                                }
-                                .forEach { file ->
-                                    total += file.length()
-                                    require(total <= 28 * 1024 * 1024) { "备份超过 28MB，请先导出大型附件" }
-                                    zip.putNextEntry(
-                                        java.util.zip.ZipEntry(file.relativeTo(dataRoot).path),
-                                    )
-                                    val frozen = snapshot.texts[file.absolutePath]
-                                    if (frozen != null) zip.write(frozen)
-                                    else file.inputStream().use { it.copyTo(zip) }
-                                    zip.closeEntry()
-                                }
-                    }
-                    zip.putNextEntry(java.util.zip.ZipEntry("experience.json"))
-                    zip.write(
-                        JSONObject()
-                            .put(
-                                "phrases",
-                                org.json.JSONArray(
-                                    ExperienceSettings.phrases.map { it.json() },
-                                ),
-                            )
-                            .put("textScale", ExperienceSettings.textScale)
-                            .put("lineSpacing", ExperienceSettings.lineSpacing)
-                            .put("taskNavigation", ExperienceSettings.taskNavigation)
-                            .put("reasoning", ExperienceSettings.reasoningMode)
-                            .put("browser", ExperienceSettings.browserEnabled)
-                            .put("maxAgents", ExperienceSettings.maxAgents)
-                            .toString()
-                            .toByteArray(),
-                    )
-                    zip.closeEntry()
-                }
-                AttachmentStore(this@AgentService)
-                    .save(
-                        output.toByteArray().inputStream(),
-                        AssistantState.selectedId,
-                        "DSHA-backup-${java.time.LocalDate.now()}.zip",
-                        "application/zip",
-                    )
-                    .id
+    private var backupJob: Job? = null
+
+    fun exportBackup(downloads: Boolean = false): Job {
+        backupJob
+            ?.takeIf { it.isActive }
+            ?.let {
+                toast("正在打包备份")
+                return it
             }
+        backupJob = scope.launch {
+            runCatching {
+                AssistantState.persist()
+                TeamState.persist(this@AgentService)
+                val preferences =
+                    JSONObject()
+                        .put("phrases", JSONArray(ExperienceSettings.phrases.map { it.json() }))
+                        .put("textScale", ExperienceSettings.textScale)
+                        .put("lineSpacing", ExperienceSettings.lineSpacing)
+                        .put("taskNavigation", ExperienceSettings.taskNavigation)
+                        .put("reasoning", ExperienceSettings.reasoningMode)
+                        .put("browser", ExperienceSettings.browserEnabled)
+                        .put("memoryEnabled", ExperienceSettings.memoryEnabled)
+                        .put("maxAgents", ExperienceSettings.maxAgents)
+                        .toString()
+                        .toByteArray()
+                val sessionId = AssistantState.selectedId
+                withContext(Dispatchers.IO) {
+                    AssistantState.awaitPersistence()
+                    if (downloads) writeDownloadBackup(preferences)
+                    else {
+                        val output = java.io.ByteArrayOutputStream()
+                        writeBackup(output, preferences, 28L * 1024 * 1024)
+                        AttachmentStore(this@AgentService)
+                            .save(
+                                output.toByteArray().inputStream(),
+                                sessionId,
+                                "DSHA-backup-${java.time.LocalDate.now()}.zip",
+                                "application/zip",
+                            )
+                            .id
+                    }
+                }
+            }
+                .onSuccess {
+                    if (downloads) toast("已保存到 Download/$it")
+                    else MainActivity.current?.exportAttachment(it)
+                }
+                .onFailure { if (it !is CancellationException) toast("备份失败：${it.message}") }
         }
-            .onSuccess { MainActivity.current?.exportAttachment(it) }
-            .onFailure { toast("备份失败：${it.message}") }
+        return requireNotNull(backupJob)
+    }
+
+    private fun writeDownloadBackup(preferences: ByteArray): String {
+        val name =
+            "DSHA-backup-" +
+                java.time.LocalDateTime.now()
+                    .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd-HHmmss")) +
+                ".zip"
+        val destination =
+            contentResolver.insert(
+                android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                android.content.ContentValues().apply {
+                    put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, name)
+                    put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "application/zip")
+                    put(
+                        android.provider.MediaStore.MediaColumns.RELATIVE_PATH,
+                        android.os.Environment.DIRECTORY_DOWNLOADS,
+                    )
+                    put(android.provider.MediaStore.MediaColumns.IS_PENDING, 1)
+                },
+            ) ?: error("无法创建下载文件")
+        try {
+            val output = contentResolver.openOutputStream(destination) ?: error("无法写入下载文件")
+            output.use { writeBackup(it, preferences, Long.MAX_VALUE) }
+            check(
+                contentResolver.update(
+                    destination,
+                    android.content.ContentValues().apply {
+                        put(android.provider.MediaStore.MediaColumns.IS_PENDING, 0)
+                    },
+                    null,
+                    null,
+                ) == 1,
+            ) {
+                "无法完成下载文件"
+            }
+            return name
+        } catch (error: Throwable) {
+            contentResolver.delete(destination, null, null)
+            throw error
+        }
+    }
+
+    private fun writeBackup(output: java.io.OutputStream, preferences: ByteArray, limit: Long) {
+        java.util.zip.ZipOutputStream(output).use { zip ->
+            val dataRoot = filesDir.canonicalFile
+            val snapshot = BackupSnapshot.capture(this, dataRoot)
+            val roots =
+                listOf(
+                    "conversations-v3.json",
+                    "agents-v1.json",
+                    "changes-v1.json",
+                    "memory.md",
+                    "persona_memory.md",
+                    "projects",
+                    "sessions",
+                    "events",
+                    "attachments",
+                    "screens",
+                    "terminal/workplace",
+                    "harness/instructions",
+                )
+            var total = 0L
+            for (relative in roots) {
+                val root = File(dataRoot, relative)
+                if (!root.exists()) continue
+                root
+                    .walkTopDown()
+                    .onEnter { it.canonicalFile == it.absoluteFile }
+                    .filter {
+                        it.isFile &&
+                            it.canonicalFile == it.absoluteFile &&
+                            snapshot.includes(it, dataRoot)
+                    }
+                    .forEach { file ->
+                        val frozen = snapshot.texts[file.absolutePath]
+                        total += frozen?.size?.toLong() ?: file.length()
+                        require(total <= limit) { "备份超过 28 MB，请使用「保存到下载」" }
+                        zip.putNextEntry(
+                            java.util.zip.ZipEntry(
+                                file.relativeTo(dataRoot).invariantSeparatorsPath,
+                            ),
+                        )
+                        if (frozen != null) zip.write(frozen)
+                        else file.inputStream().use { it.copyTo(zip) }
+                        zip.closeEntry()
+                    }
+            }
+            zip.putNextEntry(java.util.zip.ZipEntry("experience.json"))
+            zip.write(preferences)
+            zip.closeEntry()
+        }
     }
 
     private val streamIndices = mutableMapOf<String, Int>()
@@ -2950,6 +3340,8 @@ class AgentService : Service() {
     }
 
     override fun onDestroy() {
+        sandboxProtection?.close()
+        sandboxProtection = null
         dev.deepseek.mobile.proxy.MihomoManager.stopWithAgentService()
         active = false
         generation++

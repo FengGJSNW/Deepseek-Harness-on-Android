@@ -30,11 +30,17 @@ internal object ExperienceSettings {
         }
 
     var maxAgents by mutableIntStateOf(4)
+    var memoryEnabled by mutableStateOf(true)
     var textScale by mutableFloatStateOf(1f)
     var lineSpacing by mutableFloatStateOf(1.4f)
     var taskNavigation by mutableStateOf(true)
+    var hapticsEnabled by mutableStateOf(true)
+    var liquidGlassEnabled by mutableStateOf(false)
+    var glassTransparency by mutableFloatStateOf(.45f)
+    var liquidGlassBlur by mutableFloatStateOf(0f)
     var petMotion by mutableStateOf(PetMotionSettings())
     var keepTasksAwake by mutableStateOf(true)
+    var keepSandboxesAwake by mutableStateOf(false)
     var privilegedKeepAlive by mutableStateOf(false)
     val phrases = mutableStateListOf<BubblePhrase>()
     private var context: Context? = null
@@ -52,18 +58,31 @@ internal object ExperienceSettings {
                     .orEmpty(),
             )
         maxAgents = p.getInt("agents", 4).coerceIn(1, 8)
+        memoryEnabled = p.getBoolean("memoryEnabled", true)
         textScale = p.getFloat("textScale", 1f).coerceIn(.85f, 1.3f)
         lineSpacing = p.getFloat("lineSpacing", 1.4f).coerceIn(1.2f, 1.9f)
         taskNavigation = p.getBoolean("taskNavigation", true)
+        hapticsEnabled = p.getBoolean("hapticsEnabled", true)
+        liquidGlassEnabled = p.getBoolean("liquidGlassEnabled", false)
+        liquidGlassBlur =
+            p.getFloat("liquidGlassBlur", 0f).let {
+                if (it.isFinite()) it.coerceIn(0f, 24f) else 0f
+            }
+        glassTransparency =
+            p.getFloat("glassTransparency", .45f).let {
+                if (it.isFinite()) it.coerceIn(0f, 1f) else .45f
+            }
         keepTasksAwake = p.getBoolean("keepTasksAwake", true)
+        keepSandboxesAwake = p.getBoolean("keepSandboxesAwake", false)
         privilegedKeepAlive = p.getBoolean("privilegedKeepAlive", false)
+        val defaults = PetMotionSettings()
         petMotion =
             PetMotionSettings(
-                p.getFloat("petMovement", 24f).coerceIn(8f, 64f),
-                p.getFloat("petDamping", .42f).coerceIn(.25f, 1f),
-                p.getInt("petInterval", 600).coerceIn(400, 1800),
-                p.getFloat("petRate", 1f).coerceIn(.5f, 2f),
-                p.getInt("petPressUnits", 10).coerceIn(0, 30),
+                p.getFloat("petMovement", defaults.movement).coerceIn(8f, 64f),
+                p.getFloat("petDamping", defaults.damping).coerceIn(.25f, 1f),
+                p.getInt("petInterval", defaults.interval).coerceIn(400, 1800),
+                p.getFloat("petRate", defaults.rate).coerceIn(.5f, 2f),
+                p.getInt("petPressUnits", defaults.pressUnits).coerceIn(0, 30),
             )
         phrases.clear()
         val raw = p.getString("phrases", null)
@@ -112,10 +131,16 @@ internal object ExperienceSettings {
             ?.putString("reasoning", reasoningMode)
             ?.putString("browserMode", browserMode.key)
             ?.putInt("agents", maxAgents)
+            ?.putBoolean("memoryEnabled", memoryEnabled)
             ?.putFloat("textScale", textScale)
             ?.putFloat("lineSpacing", lineSpacing)
             ?.putBoolean("taskNavigation", taskNavigation)
+            ?.putBoolean("hapticsEnabled", hapticsEnabled)
+            ?.putBoolean("liquidGlassEnabled", liquidGlassEnabled)
+            ?.putFloat("glassTransparency", glassTransparency)
+            ?.putFloat("liquidGlassBlur", liquidGlassBlur)
             ?.putBoolean("keepTasksAwake", keepTasksAwake)
+            ?.putBoolean("keepSandboxesAwake", keepSandboxesAwake)
             ?.putBoolean("privilegedKeepAlive", privilegedKeepAlive)
             ?.putFloat("petMovement", petMotion.movement)
             ?.putFloat("petDamping", petMotion.damping)

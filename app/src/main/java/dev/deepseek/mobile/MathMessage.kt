@@ -2,6 +2,11 @@ package dev.deepseek.mobile
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.graphics.Rect
+import android.view.ActionMode
+import android.view.Menu
+import android.view.MenuItem
+import android.view.View
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import androidx.compose.foundation.layout.*
@@ -12,6 +17,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.*
 import org.json.JSONObject
+import org.json.JSONTokener
 
 /** Only messages containing TeX use a WebView; ordinary reading stays native and lightweight. */
 @SuppressLint("SetJavaScriptEnabled", "JavascriptInterface")
@@ -136,4 +142,84 @@ internal fun MathMessage(raw: String, modifier: Modifier = Modifier) {
 
 private class MathDocumentView(context: Context) : WebView(context) {
     var renderedPayload: String? = null
+
+    override fun startActionMode(callback: ActionMode.Callback): ActionMode? =
+        startActionMode(callback, ActionMode.TYPE_PRIMARY)
+
+    override fun startActionMode(callback: ActionMode.Callback, type: Int): ActionMode? {
+        val copyMarkdown = 0x44534841
+        val copyPlain = copyMarkdown + 1
+        return super.startActionMode(
+            object : ActionMode.Callback2() {
+                override fun onCreateActionMode(mode: ActionMode, menu: Menu): Boolean {
+                    if (!callback.onCreateActionMode(mode, menu)) return false
+                    augment(menu)
+                    return true
+                }
+
+                override fun onPrepareActionMode(mode: ActionMode, menu: Menu): Boolean {
+                    val changed = callback.onPrepareActionMode(mode, menu)
+                    return augment(menu) || changed
+                }
+
+                private fun augment(menu: Menu): Boolean {
+                    val copy =
+                        menu.findItem(android.R.id.copy)
+                            ?: (0 until menu.size()).asSequence().map(menu::getItem).firstOrNull {
+                                it.title == context.getText(android.R.string.copy) ||
+                                    it.title == "复制文本"
+                            }
+                    if (copy != null) copy.title = "复制文本"
+                    else if (menu.findItem(copyPlain) == null)
+                        menu
+                            .add(0, copyPlain, 0, "复制文本")
+                            .setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS)
+                    if (menu.findItem(copyMarkdown) == null) {
+                        menu
+                            .add(0, copyMarkdown, (copy?.order ?: 0) + 1, "复制 Markdown")
+                            .setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS)
+                        return true
+                    }
+                    return false
+                }
+
+                override fun onActionItemClicked(mode: ActionMode, item: MenuItem): Boolean {
+                    if (item.itemId != copyMarkdown && item.itemId != copyPlain)
+                        return callback.onActionItemClicked(mode, item)
+                    val markdown = item.itemId == copyMarkdown
+                    evaluateJavascript(
+                        if (markdown) "window.selectedMarkdown()"
+                        else "String(window.getSelection())",
+                    ) { result ->
+                        val text = runCatching {
+                            JSONTokener(result).nextValue() as? String
+                        }
+                            .getOrNull()
+                        if (!text.isNullOrBlank() && text.length <= 65536) {
+                            context
+                                .getSystemService(android.content.ClipboardManager::class.java)
+                                ?.setPrimaryClip(
+                                    android.content.ClipData.newPlainText(
+                                        if (markdown) "Markdown" else "文本",
+                                        text,
+                                    ),
+                                )
+                        }
+                        mode.finish()
+                    }
+                    return true
+                }
+
+                override fun onGetContentRect(mode: ActionMode, view: View, outRect: Rect) {
+                    if (callback is ActionMode.Callback2)
+                        callback.onGetContentRect(mode, view, outRect)
+                    else super.onGetContentRect(mode, view, outRect)
+                }
+
+                override fun onDestroyActionMode(mode: ActionMode) =
+                    callback.onDestroyActionMode(mode)
+            },
+            type,
+        )
+    }
 }

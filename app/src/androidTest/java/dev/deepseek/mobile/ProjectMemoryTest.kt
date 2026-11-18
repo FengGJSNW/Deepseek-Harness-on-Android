@@ -81,6 +81,7 @@ class ProjectMemoryTest {
             val a = AssistantState.addSession(project.id)
             a.title = "整理今天的想法"
             conversationId = a.id
+            repeat(6) { AssistantState.addSession(project.id).title = "项目会话 ${it + 1}" }
             val independent = AssistantState.addSession()
             assertEquals("", independent.projectId)
             AssistantState.select(a.id)
@@ -92,6 +93,10 @@ class ProjectMemoryTest {
         }
         ui.onNodeWithContentDescription("会话列表").performClick()
         ui.onNodeWithText(projectName).assertIsDisplayed()
+        ui.onAllNodes(hasText("整理今天的想法") and hasAnyAncestor(hasTestTag("session-drawer")))
+            .assertCountEquals(1)
+        ui.onNodeWithText("展开显示").assertIsDisplayed().performClick()
+        ui.onNodeWithText("收起").assertIsDisplayed().performClick()
         val glyph =
             ui.onAllNodesWithTag("session-more-glyph", useUnmergedTree = true)
                 .onFirst()

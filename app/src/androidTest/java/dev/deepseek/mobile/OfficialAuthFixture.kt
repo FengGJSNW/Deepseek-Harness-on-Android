@@ -7,7 +7,7 @@ internal object OfficialAuthFixture {
         <meta name="viewport" content="width=device-width,initial-scale=1"><title>合成对话 - DeepSeek</title>
         <a href="/a/chat/s/fixture-12345678">合成历史</a>
         <div class="ds-message"><div class="ds-assistant-message-main-content">登录验收成功</div></div>
-        <div><div><textarea></textarea><div role="button" class="ds-button--primary"><svg><path d="M8.3125 fixture"/></svg></div></div></div>
+        <div><div><textarea></textarea><div role="button" class="ds-button--primary"><svg><path d="M8.3125 0.980206 fixture"/></svg></div></div></div>
         """
             .trimIndent()
     val login =

@@ -17,12 +17,12 @@ internal class ContextManager(
     private val root = File(context.filesDir, "harness/context").apply { mkdirs() }
     private val lock = Any()
 
-    init {
-        proposals()
-            .let { values -> (0 until values.length()).map { values.getJSONObject(it) } }
-            .filter { it.optString("status") == "pending" }
-            .forEach { settleProposal(it.getString("id"), "interrupted") }
-    }
+    private data class MemoryLoad(
+        val checkpoint: String,
+        val files: MutableMap<String, MemorySnapshot> = mutableMapOf(),
+    )
+
+    private val memoryLoads = LinkedHashMap<Pair<String, String>, MemoryLoad>(16, .75f, true)
 
     private fun instructionFile(scope: String, project: String): File {
         require(scope in setOf("global", "project", "personality"))
@@ -59,48 +59,60 @@ internal class ContextManager(
         }
 
     private fun scopes(task: PhoneTask) =
-        listOf("global" to "", "persona" to "", "session" to task.sessionId) +
+        listOf("global" to "", "persona" to "") +
             if (task.projectId.isNotBlank()) listOf("project" to task.projectId) else emptyList()
 
-    fun startup(task: PhoneTask): JSONObject =
+    fun startup(
+        task: PhoneTask,
+        includeMemory: Boolean = true,
+        checkpoint: String = "",
+    ): JSONObject =
         synchronized(lock) {
             val result = JSONObject()
-            scopes(task).forEach { (scope, id) ->
-                if (
-                    permissions
-                        .evaluate(
-                            PermissionContext(
-                                sessionId = task.sessionId,
-                                projectId = task.projectId,
+            val key = task.sessionId to task.projectId
+            if (!includeMemory) memoryLoads.remove(key)
+            else if (checkpoint.isNotEmpty() && memoryLoads[key]?.checkpoint != checkpoint)
+                memoryLoads[key] = MemoryLoad(checkpoint)
+            val loaded = memoryLoads.getOrPut(key) { MemoryLoad(checkpoint) }
+            if (memoryLoads.size > 100) memoryLoads.remove(memoryLoads.keys.first())
+            if (includeMemory)
+                scopes(task).forEach { (scope, id) ->
+                    if (
+                        permissions
+                            .evaluate(
+                                PermissionContext(
+                                    sessionId = task.sessionId,
+                                    projectId = task.projectId,
+                                ),
+                                Capability.MEMORY_READ,
+                                if (scope in setOf("project", "session")) "$scope:$id" else scope,
+                            )
+                            .effect != PermissionEffect.ALLOW
+                    )
+                        return@forEach
+                    val memory = loaded.files.getOrPut(scope) { memories.read(scope, id) }
+                    val lines =
+                        memory.text
+                            .lineSequence()
+                            .map { it.trim() }
+                            .filter { it.isNotBlank() && !it.startsWith("```") }
+                            .take(8)
+                            .toList()
+                    result.put(
+                        scope,
+                        JSONObject()
+                            .put("scope", scope)
+                            .put("name", memory.filename)
+                            .put("text", memory.text)
+                            .put("summary", lines.joinToString("\n").take(480))
+                            .put("totalBytes", memory.text.toByteArray().size)
+                            .put("sha256", memory.sha256)
+                            .put(
+                                "detailAvailable",
+                                memory.text.trim() != lines.joinToString("\n").take(480),
                             ),
-                            Capability.MEMORY_READ,
-                            if (scope in setOf("project", "session")) "$scope:$id" else scope,
-                        )
-                        .effect != PermissionEffect.ALLOW
-                )
-                    return@forEach
-                val memory = memories.read(scope, id)
-                val lines =
-                    memory.text
-                        .lineSequence()
-                        .map { it.trim() }
-                        .filter { it.isNotBlank() && !it.startsWith("```") }
-                        .take(8)
-                        .toList()
-                result.put(
-                    scope,
-                    JSONObject()
-                        .put("scope", scope)
-                        .put("name", memory.filename)
-                        .put("summary", lines.joinToString("\n").take(480))
-                        .put("totalBytes", memory.text.toByteArray().size)
-                        .put("sha256", memory.sha256)
-                        .put(
-                            "detailAvailable",
-                            memory.text.trim() != lines.joinToString("\n").take(480),
-                        ),
-                )
-            }
+                    )
+                }
             val instructions = JSONArray()
             for (name in
                 listOf("personality", "global") +
@@ -119,8 +131,9 @@ internal class ContextManager(
                 )
                     instructions.put(instruction(name, task.projectId))
             }
+            result.put("instructions", instructions)
+            if (!includeMemory) return@synchronized result
             result
-                .put("instructions", instructions)
                 .put(
                     "sessionSummary",
                     if (
@@ -287,97 +300,6 @@ internal class ContextManager(
             .put("offset", start)
             .put("totalChars", text.length)
     }
-
-    fun recordProposal(task: PhoneTask, before: MemorySnapshot, after: String): String =
-        synchronized(lock) {
-            val id = UUID.randomUUID().toString()
-            write(
-                File(root, "proposals/$id.json"),
-                JSONObject()
-                    .put("id", id)
-                    .put("taskId", task.id)
-                    .put("sessionId", task.sessionId)
-                    .put("projectId", task.projectId)
-                    .put("scope", before.scope)
-                    .put("expectedSha256", before.sha256)
-                    .put("before", before.text)
-                    .put("after", after)
-                    .put("status", "pending")
-                    .put("createdAt", System.currentTimeMillis())
-                    .toString()
-                    .toByteArray(),
-            )
-            id
-        }
-
-    fun settleProposal(id: String, status: String) =
-        synchronized(lock) {
-            UUID.fromString(id)
-            require(status in setOf("applied", "denied", "interrupted", "conflicted"))
-            val file = File(root, "proposals/$id.json")
-            val json = JSONObject(String(AtomicFile(file).readFully()))
-            json.put("status", status)
-            write(file, json.toString().toByteArray())
-        }
-
-    fun proposals(): JSONArray =
-        synchronized(lock) {
-            JSONArray(
-                File(root, "proposals")
-                    .listFiles()
-                    .orEmpty()
-                    .filter { it.extension == "json" }
-                    .mapNotNull {
-                        runCatching { JSONObject(String(AtomicFile(it).readFully())) }.getOrNull()
-                    }
-                    .sortedByDescending { it.optLong("createdAt") }
-                    .take(100),
-            )
-        }
-
-    fun applyProposalFromUser(id: String): JSONObject =
-        synchronized(lock) {
-            UUID.fromString(id)
-            val item = JSONObject(String(AtomicFile(File(root, "proposals/$id.json")).readFully()))
-            check(item.getString("status") == "interrupted") { "当前提案请在对话中确认，版本冲突请手动合并记忆" }
-            val scope = item.getString("scope")
-            val policy =
-                PermissionContext(
-                    sessionId = item.getString("sessionId"),
-                    projectId = item.optString("projectId"),
-                    actor = "user",
-                )
-            check(
-                permissions
-                    .evaluate(
-                        policy,
-                        Capability.MEMORY_WRITE,
-                        memoryResource(
-                            scope,
-                            item.getString("sessionId"),
-                            item.optString("projectId"),
-                        ),
-                    )
-                    .effect != PermissionEffect.DENY,
-            ) {
-                "权限规则禁止该记忆写入"
-            }
-            try {
-                val saved =
-                    memories.write(
-                        scope,
-                        if (scope == "session") item.getString("sessionId")
-                        else item.optString("projectId"),
-                        item.getString("after"),
-                        item.getString("expectedSha256"),
-                    )
-                settleProposal(id, "applied")
-                saved.json()
-            } catch (error: Throwable) {
-                settleProposal(id, "conflicted")
-                throw error
-            }
-        }
 
     companion object {
         fun memoryResource(scope: String, sessionId: String, projectId: String): String =

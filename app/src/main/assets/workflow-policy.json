@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "readOnlyTools": [
+    "complete", "image", "wait", "ask_user", "observe", "list_apps",
+    "terminal_status", "sandbox_list", "sandbox_connect",
+    "workspace_list", "workspace_read", "workspace_search", "workspace_context",
+    "worktree_list", "worktree_review", "memory_read", "memory_search",
+    "instructions_read", "context_search", "context_read", "skill_read",
+    "attachment_read", "mcp_list", "browser_search", "browser_fetch",
+    "browser_snapshot", "browser_source", "work_plan", "work_status"
+  ],
+  "workflowTools": ["work_plan", "work_status", "verification_run"],
+  "workspaceTools": ["workspace_search", "workspace_context", "workspace_edit"]
+}

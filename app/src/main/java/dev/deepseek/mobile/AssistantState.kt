@@ -3,6 +3,7 @@ package dev.deepseek.mobile
 import android.content.Context
 import android.util.AtomicFile
 import androidx.compose.runtime.*
+import dev.deepseek.mobile.workflow.*
 import java.io.File
 import java.util.UUID
 import org.json.JSONArray
@@ -18,9 +19,23 @@ data class ChatEntry(
 )
 
 class Conversation(val id: String = UUID.randomUUID().toString(), title: String = "新对话") {
+    var workMode by mutableStateOf(WorkMode.EXECUTE)
+    internal var workPlan by mutableStateOf(WorkPlan())
+    internal var usage by mutableStateOf(ConversationUsage())
     var projectId by mutableStateOf("")
     var updatedAt by mutableLongStateOf(System.currentTimeMillis())
-    var title by mutableStateOf(title)
+    private var titleValue by mutableStateOf(title)
+    internal var titleRevision = 0L
+        private set
+
+    internal var titleGenerationAttempted = false
+    var title: String
+        get() = titleValue
+        set(value) {
+            titleValue = value
+            titleRevision++
+        }
+
     var draft by mutableStateOf("")
     var model by mutableStateOf("deepseek-flash")
     var effort by mutableStateOf("low")
@@ -31,7 +46,9 @@ class Conversation(val id: String = UUID.randomUUID().toString(), title: String 
     var fileTools by mutableStateOf(true)
     var workspace by mutableStateOf("")
     var terminalEnabled by mutableStateOf(true)
-    var terminalLevel by mutableStateOf("sandbox")
+    var terminalLevel by mutableStateOf("app")
+    internal var sandboxEnabled by mutableStateOf(false)
+    internal var sandboxId by mutableStateOf("")
     internal var browserProvider by mutableStateOf(BrowserProvider.LOCAL)
     internal var creatorMode by mutableStateOf(false)
     val files = mutableStateListOf<String>()
@@ -58,7 +75,19 @@ class PhoneTask(
     val childEffort: String = "low",
     val browserProvider: String = "local",
     val creatorMode: Boolean = false,
+    val sandboxId: String = "",
+    val sandboxOnly: Boolean = false,
+    val workMode: WorkMode = WorkMode.EXECUTE,
+    val sandboxIds: Set<String>? = null,
 ) {
+    fun acceptsSandbox(id: String): Boolean =
+        id.isNotBlank() && (sandboxIds?.contains(id) ?: (!sandboxOnly || id == sandboxId))
+
+    val hasSandboxAccess: Boolean
+        get() = sandboxIds?.isNotEmpty() == true || sandboxId.isNotBlank()
+
+    internal var workPlan by mutableStateOf(WorkPlan())
+    internal val verifications = mutableStateListOf<VerificationRecord>()
     var status by mutableStateOf("queued")
     var progress by mutableStateOf("等待执行")
     internal var avatarPhase by mutableStateOf(AvatarPhase.THINKING)
@@ -80,6 +109,12 @@ class PhoneTask(
             .put("childEffort", childEffort)
             .put("browserProvider", browserProvider)
             .put("creatorMode", creatorMode)
+            .put("sandboxId", sandboxId)
+            .put("sandboxOnly", sandboxOnly)
+            .put("sandboxIds", sandboxIds?.let { JSONArray(it.toList()) })
+            .put("workMode", workMode.key)
+            .put("workPlan", workPlan.json())
+            .put("verifications", JSONArray(verifications.map { it.json() }))
             .put("access", access)
             .put("phoneTools", phoneTools)
             .put("fileTools", fileTools)
@@ -118,7 +153,6 @@ object AssistantState {
     val sessions = mutableStateListOf<Conversation>()
     val tasks = mutableStateListOf<PhoneTask>()
     val projects = mutableStateListOf<WorkProject>()
-    var pendingMemory by mutableStateOf<MemoryProposal?>(null)
     val current
         get() = sessions.firstOrNull { it.id == selectedId } ?: sessions.first()
 
@@ -169,7 +203,6 @@ object AssistantState {
         sessions.clear()
         tasks.clear()
         projects.clear()
-        pendingMemory = null
         error = ""
         try {
             val file = AtomicFile(File(ctx.filesDir, "conversations-v3.json"))
@@ -189,6 +222,7 @@ object AssistantState {
                         projects.add(
                             WorkProject(p.getString("id"), p.optString("title", "项目")).apply {
                                 collapsed = p.optBoolean("collapsed")
+                                defaultSandboxId = p.optString("defaultSandboxId")
                             },
                         )
                 }
@@ -200,7 +234,13 @@ object AssistantState {
                         v.optString("projectId")
                             .takeIf { id -> projects.any { it.id == id } }
                             .orEmpty()
+                    c.titleGenerationAttempted = v.optBoolean("titleGenerationAttempted", true)
                     c.updatedAt = v.optLong("updatedAt", System.currentTimeMillis())
+                    c.workMode = WorkMode.from(v.optString("workMode"))
+                    c.workPlan =
+                        runCatching { WorkPlan.parse(v.optJSONObject("workPlan")) }
+                            .getOrDefault(WorkPlan())
+                    c.usage = ConversationUsage.from(v.optJSONObject("usage"))
                     c.draft = v.optString("draft")
                     c.model = v.optString("model", "deepseek-flash")
                     c.effort = normalizeEffort(v.optString("effort", "low"))
@@ -211,11 +251,16 @@ object AssistantState {
                     c.phoneTools = v.optBoolean("phone", true)
                     c.fileTools = v.optBoolean("files")
                     c.workspace = v.optString("workspace")
-                    c.terminalEnabled = v.optBoolean("terminalEnabled")
+                    val storedTerminal = v.optString("terminalLevel", "app")
+                    c.terminalEnabled =
+                        v.optBoolean("terminalEnabled") &&
+                            storedTerminal !in setOf("sandbox", "isolated")
                     c.terminalLevel =
-                        v.optString("terminalLevel", "sandbox").let {
-                            if (it == "isolated") "sandbox" else it
-                        }
+                        storedTerminal.takeIf {
+                            it in setOf("app", "shell", "root", "root_guarded")
+                        } ?: "app"
+                    c.sandboxId = v.optString("sandboxId")
+                    c.sandboxEnabled = v.optBoolean("sandboxEnabled", false)
                     c.browserProvider = BrowserProvider.parse(v.optString("browserProvider"))
                     c.creatorMode = v.optBoolean("creatorMode")
                     c.images.addAll(strings(v.optJSONArray("images")))
@@ -258,7 +303,19 @@ object AssistantState {
                             normalizeEffort(v.optString("childEffort", "low"), child = true),
                             BrowserProvider.parse(v.optString("browserProvider")).key,
                             v.optBoolean("creatorMode"),
+                            v.optString("sandboxId"),
+                            v.optBoolean("sandboxOnly"),
+                            WorkMode.from(v.optString("workMode")),
+                            if (v.has("sandboxIds")) strings(v.optJSONArray("sandboxIds")).toSet()
+                            else null,
                         )
+                    t.workPlan =
+                        runCatching { WorkPlan.parse(v.optJSONObject("workPlan")) }
+                            .getOrDefault(WorkPlan())
+                    val checks = v.optJSONArray("verifications") ?: JSONArray()
+                    for (j in 0 until minOf(40, checks.length())) t.verifications.add(
+                        VerificationRecord.parse(checks.getJSONObject(j)).recovered(),
+                    )
                     t.status = v.optString("status")
                     if (t.status in listOf("queued", "running", "waiting", "stopping")) {
                         t.status = "interrupted"
@@ -339,10 +396,14 @@ object AssistantState {
                     JSONObject()
                         .put("id", c.id)
                         .put("title", c.title)
+                        .put("titleGenerationAttempted", c.titleGenerationAttempted)
                         .put("projectId", c.projectId)
                         .put("updatedAt", c.updatedAt)
                         .put("draft", c.draft)
                         .put("model", c.model)
+                        .put("workMode", c.workMode.key)
+                        .put("workPlan", c.workPlan.json())
+                        .put("usage", c.usage.json())
                         .put("effort", c.effort)
                         .put("childModel", c.childModel)
                         .put("childEffort", c.childEffort)
@@ -352,6 +413,8 @@ object AssistantState {
                         .put("workspace", c.workspace)
                         .put("terminalEnabled", c.terminalEnabled)
                         .put("terminalLevel", c.terminalLevel)
+                        .put("sandboxEnabled", c.sandboxEnabled)
+                        .put("sandboxId", c.sandboxId)
                         .put("browserProvider", c.browserProvider.key)
                         .put("creatorMode", c.creatorMode)
                         .put("images", JSONArray(c.images))
@@ -406,6 +469,8 @@ object AssistantState {
     fun addSession(projectId: String = ""): Conversation {
         val c = Conversation()
         c.projectId = projectId.takeIf { id -> projects.any { it.id == id } }.orEmpty()
+        c.sandboxId = projects.firstOrNull { it.id == c.projectId }?.defaultSandboxId.orEmpty()
+        c.sandboxEnabled = c.sandboxId.isNotBlank()
         sessions.add(0, c)
         selectedId = c.id
         persist()

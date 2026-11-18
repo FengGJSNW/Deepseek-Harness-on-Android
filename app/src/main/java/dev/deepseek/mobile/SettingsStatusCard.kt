@@ -1,6 +1,5 @@
 package dev.deepseek.mobile
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -23,18 +22,16 @@ internal fun SettingsStatusCard(
     tint: Color = WhaleMuted,
     announce: Boolean = false,
 ) {
-    Surface(
+    DshaCard(
         Modifier.fillMaxWidth()
             .then(
                 if (announce) Modifier.semantics { liveRegion = LiveRegionMode.Polite }
                 else Modifier,
             ),
-        shape = ContinuousShape(16.dp),
-        color = Color(0xFFF8F8F7),
-        border = BorderStroke(1.dp, WhaleLine),
+        padding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
     ) {
         Row(
-            Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(icon, null, Modifier.size(20.dp), tint = tint)

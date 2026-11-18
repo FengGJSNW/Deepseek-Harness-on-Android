@@ -17,14 +17,28 @@ import org.json.JSONObject
 
 internal object ReasoningState {
     var selected by mutableStateOf<ChatEntry?>(null)
-    var owner by mutableStateOf("")
+        private set
 
-    fun open(entry: ChatEntry, agent: String = "") {
+    var owner by mutableStateOf("")
+        private set
+
+    private var liveText: (() -> String)? = null
+
+    fun open(entry: ChatEntry, agent: String = "", source: (() -> String)? = null) {
+        liveText = source
         selected = entry
         owner = agent
     }
 
+    fun close() {
+        selected = null
+        liveText = null
+    }
+
     fun text(): String {
+        liveText?.let {
+            return it()
+        }
         val messages =
             if (owner.isBlank()) AssistantState.current.messages
             else TeamState.agents.firstOrNull { it.id == owner }?.messages
@@ -87,11 +101,7 @@ internal fun AgentTimeline(
             mutableStateOf(false)
         }
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (showHeader)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                AgentAvatar(28.dp)
-                Text(name, Modifier.padding(start = 8.dp), fontSize = 12.sp, color = WhaleMuted)
-            }
+        if (showHeader) AgentMessageHeader(name)
         if (fold) {
             val count = entries.take(finalIndex).count { it.type in setOf("tool", "terminal") }
             ActivityCard(Modifier.testTag("work-details-card")) {
@@ -308,7 +318,7 @@ private fun ToolDetail(entry: ChatEntry) {
                 fontSize = 11.sp,
             )
         }
-        TextButton(onClick = { full = !full }) {
+        DshaTextButton(onClick = { full = !full }) {
             Text(if (full) "收起参数" else "查看完整参数", fontSize = 11.sp, color = WhaleMuted)
         }
         SelectionContainer {
@@ -322,15 +332,15 @@ private fun ToolDetail(entry: ChatEntry) {
             )
         }
         Row {
-            TextButton(onClick = { outputFull = !outputFull }) {
+            DshaTextButton(onClick = { outputFull = !outputFull }) {
                 Text(if (outputFull) "收起结果" else "展开结果", fontSize = 11.sp, color = WhaleMuted)
             }
             if (data.optString("name").startsWith("browser_"))
-                TextButton(
+                DshaTextButton(
                     onClick = {
                         if (OfficialWebTool.fromMethod(data.optString("name")) != null) {
                             WorkspaceState.open(WorkspaceTab.OfficialBrowser(data.optString("id")))
-                            return@TextButton
+                            return@DshaTextButton
                         }
                         val id =
                             data.optJSONObject("result")?.optString("tab").orEmpty().ifBlank {
@@ -360,12 +370,12 @@ private fun ToolDetail(entry: ChatEntry) {
 @Composable
 internal fun ReasoningIsland() {
     if (ReasoningState.selected == null || ExperienceSettings.reasoningMode != "island") return
-    WhaleSheet("思考", close = { ReasoningState.selected = null }) {
+    WhaleSheet("思考", close = ReasoningState::close) {
         SelectionContainer {
             Text(
                 ReasoningState.text(),
                 Modifier.fillMaxWidth(),
-                fontFamily = DshaFonts.family(FontRole.BODY),
+                fontFamily = DshaFonts.family(FontRole.UI),
                 fontSize = 13.sp,
                 lineHeight = 21.sp,
             )
@@ -398,7 +408,7 @@ internal fun BoxScope.ReasoningBubble() {
                         fontSize = 12.sp,
                         color = WhaleMuted,
                     )
-                    SmallIcon(AppIcons.Close, "关闭思考气泡") { ReasoningState.selected = null }
+                    SmallIcon(AppIcons.Close, "关闭思考气泡", action = ReasoningState::close)
                 }
                 SelectionContainer {
                     Text(

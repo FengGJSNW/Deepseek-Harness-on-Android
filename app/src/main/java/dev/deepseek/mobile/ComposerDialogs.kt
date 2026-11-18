@@ -6,38 +6,64 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.deepseek.mobile.terminal.TerminalLevel
+import org.json.JSONObject
 
 /** Options rendered inside their own toolbar-anchored popup. */
 @Composable
 internal fun ColumnScope.ComposerOptions(kind: String, c: Conversation, close: () -> Unit) {
-    Text(
-        when (kind) {
-            "attach" -> "添加附件"
-            "access" -> "操作权限"
-            else -> "终端环境"
-        },
-        Modifier.padding(start = 10.dp, top = 6.dp, bottom = 8.dp),
-        fontSize = 12.sp,
-        lineHeight = 18.sp,
-        color = WhaleMuted,
-        fontWeight = FontWeight.Medium,
-    )
+    val afterReturn = LocalAfterMenuReturn.current
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            when (kind) {
+                "attach" -> "添加附件"
+                "access" -> "操作权限"
+                else -> "终端环境"
+            },
+            Modifier.weight(1f).padding(start = 10.dp, top = 6.dp, bottom = 8.dp),
+            fontSize = 12.sp,
+            lineHeight = 18.sp,
+            color = WhaleMuted,
+            fontWeight = FontWeight.Medium,
+        )
+        if (kind == "terminal") SandboxSwitch(c)
+    }
+    val running = AssistantState.running?.takeIf { it.sessionId == c.id }
+    if (running != null && kind in setOf("access", "terminal")) {
+        val current =
+            if (kind == "access") accessTitle(running.access)
+            else
+                terminalTitle(
+                    running.terminalEnabled,
+                    runCatching {
+                            JSONObject(running.terminalConfig).getString("level")
+                        }
+                        .getOrDefault("sandbox"),
+                )
+        val selected =
+            if (kind == "access") accessTitle(c.access)
+            else if (c.sandboxEnabled) "Sandbox"
+            else terminalTitle(c.terminalEnabled, c.terminalLevel)
+        Text(
+            if (current == selected) "当前任务：$current。改动对新任务生效。" else "当前任务：$current · 新任务：$selected",
+            Modifier.padding(start = 10.dp, end = 10.dp, bottom = 6.dp),
+            color = WhaleMuted,
+            fontSize = 11.sp,
+            lineHeight = 16.sp,
+        )
+    }
     when (kind) {
         "attach" -> {
             ToolbarOptionRow(AppIcons.Image, "图片", "最多 4 张", false) {
-                MainActivity.current?.pickImage()
-                close()
+                afterReturn { MainActivity.current?.pickImage() }
             }
             ToolbarOptionRow(AppIcons.Description, "文件与文档", "PDF、Office、文本等 · 最多 32MB", false) {
-                MainActivity.current?.pickText()
-                close()
+                afterReturn { MainActivity.current?.pickText() }
             }
         }
         "access" ->
@@ -60,13 +86,14 @@ internal fun ColumnScope.ComposerOptions(kind: String, c: Conversation, close: (
                 }
             }
         "terminal" -> {
+            SandboxSelection(c)
             ToolbarOptionRow(AppIcons.Terminal, "关闭终端", "", !c.terminalEnabled, WhaleMuted) {
                 c.terminalEnabled = false
                 AssistantState.persist()
                 close()
             }
             TerminalLevel.entries
-                .filter { it != TerminalLevel.ISOLATED }
+                .filter { it !in setOf(TerminalLevel.ISOLATED, TerminalLevel.SANDBOX) }
                 .forEach { level ->
                     ToolbarOptionRow(
                         terminalIcon(level.key),
@@ -79,14 +106,16 @@ internal fun ColumnScope.ComposerOptions(kind: String, c: Conversation, close: (
                         close()
                     }
                 }
-            HorizontalDivider(Modifier.padding(vertical = 5.dp), color = WhaleLine)
-            ToolbarOptionRow(AppIcons.Terminal, "本地 Linux 终端", "直接操作当前工作域", false) {
-                LocalTerminalState.open(c.id)
-                close()
+            GlassMenuDivider()
+            ToolbarOptionRow(AppIcons.Terminal, "Sandbox 终端", "选择一个 Sandbox 进入", false) {
+                afterReturn { WorkspaceState.open(WorkspaceTab.SandboxAccess) }
             }
         }
     }
 }
+
+private fun terminalTitle(enabled: Boolean, level: String) =
+    if (enabled) TerminalLevel.of(level).title else "已关闭"
 
 @Composable
 private fun ToolbarOptionRow(
@@ -97,31 +126,5 @@ private fun ToolbarOptionRow(
     tint: Color = WhaleBlue,
     click: () -> Unit,
 ) {
-    Row(
-        Modifier.fillMaxWidth()
-            .clip(ContinuousShape(10.dp))
-            .background(if (selected) WhaleTint else Color.Transparent)
-            .clickable(onClick = click)
-            .padding(horizontal = 10.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(icon, null, Modifier.size(21.dp), tint = tint)
-        Column(Modifier.weight(1f).padding(start = 11.dp, end = 6.dp)) {
-            Text(
-                title,
-                fontSize = 14.sp,
-                lineHeight = 20.sp,
-                color = if (selected) tint else WhaleInk,
-            )
-            if (detail.isNotEmpty())
-                Text(
-                    detail,
-                    fontSize = 11.sp,
-                    lineHeight = 16.sp,
-                    color = WhaleMuted,
-                    modifier = Modifier.padding(top = 2.dp),
-                )
-        }
-        if (selected) Icon(AppIcons.Check, "已选择", Modifier.size(17.dp), tint = tint)
-    }
+    GlassMenuRow(icon, title, detail, selected, if (tint == WhaleBlue) WhaleInk else tint, click)
 }

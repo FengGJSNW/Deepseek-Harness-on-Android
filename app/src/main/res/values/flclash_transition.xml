@@ -1,0 +1,14 @@
+<resources>
+    <style name="DshaFlClashLaunchTheme" parent="LaunchTheme">
+        <item name="android:windowAnimationStyle">@style/DshaSceneFade</item>
+    </style>
+    <style name="DshaFlClashNormalTheme" parent="NormalTheme">
+        <item name="android:windowAnimationStyle">@style/DshaSceneFade</item>
+    </style>
+    <style name="DshaSceneFade">
+        <item name="android:activityOpenEnterAnimation">@anim/dsha_scene_enter</item>
+        <item name="android:activityOpenExitAnimation">@anim/dsha_scene_exit</item>
+        <item name="android:activityCloseEnterAnimation">@anim/dsha_scene_enter</item>
+        <item name="android:activityCloseExitAnimation">@anim/dsha_scene_exit</item>
+    </style>
+</resources>

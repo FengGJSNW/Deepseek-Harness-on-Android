@@ -97,60 +97,78 @@ internal fun OfficialBrowserWorkspace(conversation: Conversation, requested: Str
         }
     var selectedId by rememberSaveable(conversation.id, requested) { mutableStateOf(requested) }
     val selected = records.firstOrNull { it.id == selectedId }
-    Column(Modifier.fillMaxSize().testTag("workspace-official-browser")) {
-        if (selected == null) {
-            Column(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 12.dp)) {
-                Text("DeepSeek 网页搜索与抓取", fontSize = 17.sp, fontWeight = FontWeight.Medium)
-                Text(
-                    "官方服务返回搜索结果和网页正文，成功调用按次计费。",
-                    Modifier.padding(top = 4.dp),
-                    color = WhaleMuted,
-                    fontSize = 12.sp,
-                )
+    if (selected == null) {
+        LazyColumn(
+            Modifier.fillMaxSize().testTag("workspace-official-browser"),
+            contentPadding =
+                PaddingValues(
+                    start = 18.dp,
+                    end = 18.dp,
+                    top = LocalWorkspaceTopInset.current,
+                    bottom = 16.dp,
+                ),
+        ) {
+            item {
+                Column(Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
+                    Text("DeepSeek 网页搜索与抓取", fontSize = 17.sp, fontWeight = FontWeight.Medium)
+                    Text(
+                        "官方服务返回搜索结果和网页正文，成功调用按次计费。",
+                        Modifier.padding(top = 4.dp),
+                        color = WhaleMuted,
+                        fontSize = 12.sp,
+                    )
+                }
+                if (records.isEmpty())
+                    Text("Agent 使用官方工具后，结果会显示在这里。", fontSize = 13.sp, color = WhaleMuted)
             }
-            if (records.isEmpty())
-                Text(
-                    "Agent 使用官方工具后，结果会显示在这里。",
-                    Modifier.padding(horizontal = 18.dp, vertical = 8.dp),
-                    fontSize = 13.sp,
-                    color = WhaleMuted,
-                )
-            else
-                LazyColumn(contentPadding = PaddingValues(horizontal = 18.dp)) {
-                    items(records, key = { it.id }) { record ->
-                        SettingsLink(
-                            if (record.tool == OfficialWebTool.SEARCH) AppIcons.Search
-                            else AppIcons.Description,
-                            record.heading,
-                            listOf(
-                                    if (record.tool == OfficialWebTool.SEARCH) "网页搜索" else "网页抓取",
-                                    record.owner,
-                                    activityStatusLabel(record.status),
-                                )
-                                .filter { it.isNotBlank() }
-                                .joinToString(" · "),
-                        ) {
-                            selectedId = record.id
-                        }
-                        HorizontalDivider(color = WhaleLine)
+
+            items(records, key = { it.id }) { record ->
+                SettingsLink(
+                    if (record.tool == OfficialWebTool.SEARCH) AppIcons.Search
+                    else AppIcons.Description,
+                    record.heading,
+                    listOf(
+                            if (record.tool == OfficialWebTool.SEARCH) "网页搜索" else "网页抓取",
+                            record.owner,
+                            activityStatusLabel(record.status),
+                        )
+                        .filter { it.isNotBlank() }
+                        .joinToString(" · "),
+                ) {
+                    selectedId = record.id
+                }
+                HorizontalDivider(color = WhaleLine)
+            }
+        }
+    } else {
+        FadingHeaderLayout(
+            height = LocalWorkspaceTopInset.current + 56.dp,
+            sharedTop = LocalWorkspaceTopInset.current,
+            color = androidx.compose.ui.graphics.Color.White,
+            header = {
+                Column {
+                    Spacer(Modifier.height(LocalWorkspaceTopInset.current))
+                    Row(
+                        Modifier.fillMaxWidth().padding(end = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        SmallIcon(AppIcons.ArrowBack, "返回官方浏览记录") { selectedId = "" }
+                        Text(selected.heading, Modifier.weight(1f), maxLines = 2, fontSize = 16.sp)
                     }
                 }
-        } else {
-            Row(
-                Modifier.fillMaxWidth().padding(end = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                SmallIcon(AppIcons.ArrowBack, "返回官方浏览记录") { selectedId = "" }
-                Text(selected.heading, Modifier.weight(1f), maxLines = 2, fontSize = 16.sp)
-            }
-            HorizontalDivider(color = WhaleLine)
-            OfficialWebResult(selected, Modifier.weight(1f).fillMaxWidth())
+            },
+        ) { topInset ->
+            OfficialWebResult(selected, Modifier.fillMaxSize(), topInset)
         }
     }
 }
 
 @Composable
-private fun OfficialWebResult(record: OfficialWebRecord, modifier: Modifier) {
+private fun OfficialWebResult(
+    record: OfficialWebRecord,
+    modifier: Modifier,
+    topInset: androidx.compose.ui.unit.Dp,
+) {
     val result = record.result
     if (record.status != "done" || result == null) {
         Text(
@@ -159,7 +177,7 @@ private fun OfficialWebResult(record: OfficialWebRecord, modifier: Modifier) {
                 .orEmpty()
                 .ifBlank { record.summary }
                 .ifBlank { activityStatusLabel(record.status) },
-            modifier.padding(18.dp),
+            modifier.padding(start = 18.dp, end = 18.dp, top = topInset + 18.dp, bottom = 18.dp),
             fontSize = 13.sp,
             color = WhaleMuted,
         )
@@ -167,7 +185,11 @@ private fun OfficialWebResult(record: OfficialWebRecord, modifier: Modifier) {
     }
     if (record.tool == OfficialWebTool.SEARCH) {
         val results = result.optJSONArray("results")
-        LazyColumn(modifier, contentPadding = PaddingValues(18.dp)) {
+        LazyColumn(
+            modifier,
+            contentPadding =
+                PaddingValues(start = 18.dp, end = 18.dp, top = topInset + 18.dp, bottom = 18.dp),
+        ) {
             if (results == null || results.length() == 0)
                 item { Text("未找到可显示的结果", color = WhaleMuted) }
             else
@@ -196,7 +218,9 @@ private fun OfficialWebResult(record: OfficialWebRecord, modifier: Modifier) {
         // Official content stays inert and does not make any local page or image requests.
         SelectionContainer(modifier) {
             Column(
-                Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(18.dp),
+                Modifier.fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(start = 18.dp, end = 18.dp, top = topInset + 18.dp, bottom = 18.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Text(result.optString("url"), fontSize = 12.sp, color = WhaleBlue)

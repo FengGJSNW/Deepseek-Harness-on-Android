@@ -184,7 +184,7 @@ internal fun TaskNavigator(
                             lineHeight = 17.sp,
                             color = WhaleMuted,
                         )
-                    TextButton(
+                    DshaTextButton(
                         onClick = {
                             jump(anchor)
                             preview = -1

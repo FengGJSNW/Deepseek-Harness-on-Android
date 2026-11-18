@@ -225,66 +225,86 @@ internal fun agentColor(index: Int) = agentColors[index % agentColors.size]
 
 @Composable
 internal fun TeamList(agents: List<AgentWork>) {
-    Column(Modifier.fillMaxSize().padding(horizontal = 18.dp)) {
-        Text("子 Agent", Modifier.padding(vertical = 14.dp), fontSize = 17.sp)
-        if (agents.isEmpty())
-            Text(
-                "当前会话启动的子 Agent 将显示在这里。",
-                Modifier.padding(vertical = 12.dp),
-                fontSize = 13.sp,
-                color = WhaleMuted,
-            )
-        LazyColumn(Modifier.fillMaxWidth()) {
-            items(agents.size, key = { agents[it].id }) { index ->
-                val work = agents[index]
-                Row(
-                    Modifier.fillMaxWidth()
-                        .clickable {
-                            WorkspaceState.open(WorkspaceTab.Agent(work.id))
-                        }
-                        .padding(vertical = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(agentIcon(index), null, Modifier.size(21.dp), tint = agentColor(index))
-                    Text(
-                        work.name,
-                        Modifier.weight(1f).padding(horizontal = 12.dp),
-                        fontSize = 14.sp,
-                    )
-                    Icon(AppIcons.ChevronRight, null, Modifier.size(16.dp), tint = WhaleMuted)
-                }
-                HorizontalDivider(color = WhaleLine)
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        contentPadding =
+            PaddingValues(
+                start = 18.dp,
+                end = 18.dp,
+                top = LocalWorkspaceTopInset.current,
+                bottom = 16.dp,
+            ),
+    ) {
+        item {
+            Text("子 Agent", Modifier.padding(vertical = 14.dp), fontSize = 17.sp)
+            if (agents.isEmpty())
+                Text(
+                    "当前会话启动的子 Agent 将显示在这里。",
+                    Modifier.padding(vertical = 12.dp),
+                    fontSize = 13.sp,
+                    color = WhaleMuted,
+                )
+        }
+        items(agents.size, key = { agents[it].id }) { index ->
+            val work = agents[index]
+            Row(
+                Modifier.fillMaxWidth()
+                    .clickable {
+                        WorkspaceState.open(WorkspaceTab.Agent(work.id))
+                    }
+                    .padding(vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(agentIcon(index), null, Modifier.size(21.dp), tint = agentColor(index))
+                Text(
+                    work.name,
+                    Modifier.weight(1f).padding(horizontal = 12.dp),
+                    fontSize = 14.sp,
+                )
+                Icon(AppIcons.ChevronRight, null, Modifier.size(16.dp), tint = WhaleMuted)
             }
+            HorizontalDivider(color = WhaleLine)
         }
     }
 }
 
 @Composable
 internal fun TeamConversation(work: AgentWork) {
-    Column(Modifier.fillMaxSize().padding(horizontal = 18.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            SmallIcon(AppIcons.ArrowBack, "返回子 Agent 列表") {
-                WorkspaceState.open(WorkspaceTab.Agents)
+    FadingHeaderLayout(
+        height = LocalWorkspaceTopInset.current + 56.dp,
+        sharedTop = LocalWorkspaceTopInset.current,
+        color = Color.White,
+        header = {
+            Column(Modifier.padding(horizontal = 18.dp)) {
+                Spacer(Modifier.height(LocalWorkspaceTopInset.current))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    SmallIcon(AppIcons.ArrowBack, "返回子 Agent 列表") {
+                        WorkspaceState.open(WorkspaceTab.Agents)
+                    }
+                    Column(Modifier.weight(1f)) {
+                        Text(work.name, fontSize = 16.sp)
+                        Text(
+                            statusName(work.status) +
+                                " · " +
+                                (if (work.model == "deepseek-flash") "Flash" else "Pro") +
+                                " · " +
+                                work.effort,
+                            fontSize = 12.sp,
+                            color = WhaleMuted,
+                        )
+                    }
+                    if (work.status == "running")
+                        DshaTextButton(onClick = { AgentService.current?.stopChild(work.id) }) {
+                            Text("停止")
+                        }
+                }
             }
-            Column(Modifier.weight(1f)) {
-                Text(work.name, fontSize = 16.sp)
-                Text(
-                    statusName(work.status) +
-                        " · " +
-                        (if (work.model == "deepseek-flash") "Flash" else "Pro") +
-                        " · " +
-                        work.effort,
-                    fontSize = 12.sp,
-                    color = WhaleMuted,
-                )
-            }
-            if (work.status == "running")
-                TextButton(onClick = { AgentService.current?.stopChild(work.id) }) { Text("停止") }
-        }
-        HorizontalDivider(color = WhaleLine)
+        },
+    ) { topInset ->
         LazyColumn(
-            Modifier.fillMaxWidth().weight(1f),
-            contentPadding = PaddingValues(vertical = 12.dp),
+            Modifier.fillMaxSize(),
+            contentPadding =
+                PaddingValues(start = 18.dp, end = 18.dp, top = topInset + 12.dp, bottom = 12.dp),
         ) {
             item {
                 AgentTimeline(

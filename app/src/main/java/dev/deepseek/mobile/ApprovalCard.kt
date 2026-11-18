@@ -19,9 +19,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-internal fun PhoneTask.reviewTitle(sharedMemory: Boolean = false): String =
+internal fun PhoneTask.reviewTitle(): String =
     when {
-        sharedMemory -> "共享记忆更新"
         terminalApproval -> "批准终端命令"
         approval -> "批准这项操作"
         else -> "Agent 需要你的回复"
@@ -30,8 +29,7 @@ internal fun PhoneTask.reviewTitle(sharedMemory: Boolean = false): String =
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun QuestionCard(task: PhoneTask, modifier: Modifier = Modifier) {
-    val proposal = AssistantState.pendingMemory?.takeIf { it.taskId == task.id }
-    val title = task.reviewTitle(proposal != null)
+    val title = task.reviewTitle()
     var answer by rememberSaveable(task.id, task.question) { mutableStateOf("") }
     var entered by remember(task.id, task.question) { mutableStateOf(false) }
     val reveal =
@@ -63,7 +61,6 @@ internal fun QuestionCard(task: PhoneTask, modifier: Modifier = Modifier) {
                 ) {
                     Icon(
                         when {
-                            proposal != null -> AppIcons.Description
                             task.terminalApproval -> AppIcons.Terminal
                             task.approval -> AppIcons.Shield
                             else -> AppIcons.Chat
@@ -91,39 +88,14 @@ internal fun QuestionCard(task: PhoneTask, modifier: Modifier = Modifier) {
                         .padding(vertical = 9.dp),
                     verticalArrangement = Arrangement.spacedBy(7.dp),
                 ) {
-                    if (proposal != null) {
-                        Text(
-                            proposal.before.filename,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                        )
-                        Text(
-                            if (proposal.before.scope == "global") "影响所有 Work 会话" else "影响项目中的会话",
-                            fontSize = 11.sp,
-                            color = WhaleMuted,
-                        )
-                        listOf("原内容" to proposal.before.text, "新内容" to proposal.after).forEach {
-                            (label, text) ->
-                            Text(label, fontSize = 11.sp, color = WhaleMuted)
-                            Text(
-                                text.ifBlank { "（空白）" },
-                                fontSize = 12.sp,
-                                lineHeight = 18.sp,
-                                modifier =
-                                    Modifier.fillMaxWidth()
-                                        .background(WhaleMist, ContinuousShape(8.dp))
-                                        .padding(8.dp),
-                            )
-                        }
-                    } else
-                        Text(
-                            task.question,
-                            fontSize = 13.sp,
-                            lineHeight = 19.sp,
-                            fontFamily =
-                                if (task.terminalApproval) DshaFonts.mono
-                                else LocalTextStyle.current.fontFamily,
-                        )
+                    Text(
+                        task.question,
+                        fontSize = 13.sp,
+                        lineHeight = 19.sp,
+                        fontFamily =
+                            if (task.terminalApproval) DshaFonts.mono
+                            else LocalTextStyle.current.fontFamily,
+                    )
                 }
             }
             if (!task.approval)
@@ -140,11 +112,10 @@ internal fun QuestionCard(task: PhoneTask, modifier: Modifier = Modifier) {
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(5.dp, Alignment.End),
             ) {
-                TextButton(
+                DshaTextButton(
                     onClick = {
                         val service = AgentService.current
                         when {
-                            proposal != null -> service?.answerMemory(proposal, false)
                             task.terminalApproval -> service?.answerTerminal("deny")
                             task.approval -> service?.denyCurrentApproval()
                             else -> service?.stopTask()
@@ -154,15 +125,14 @@ internal fun QuestionCard(task: PhoneTask, modifier: Modifier = Modifier) {
                     Text(if (task.approval) "拒绝" else "中断任务")
                 }
                 if (task.terminalApproval)
-                    TextButton(onClick = { AgentService.current?.answerTerminal("similar") }) {
+                    DshaTextButton(onClick = { AgentService.current?.answerTerminal("similar") }) {
                         Text("允许类似命令")
                     }
-                Button(
+                DshaButton(
                     enabled = task.approval || answer.isNotBlank(),
                     onClick = {
                         val service = AgentService.current
                         when {
-                            proposal != null -> service?.answerMemory(proposal, true)
                             task.terminalApproval -> service?.answerTerminal("once")
                             else -> service?.answer(answer.trim(), task.approval)
                         }
@@ -170,7 +140,6 @@ internal fun QuestionCard(task: PhoneTask, modifier: Modifier = Modifier) {
                 ) {
                     Text(
                         when {
-                            proposal != null -> "允许此次更新"
                             task.terminalApproval -> "允许本次命令"
                             task.approval -> "允许这次操作"
                             else -> "回复"

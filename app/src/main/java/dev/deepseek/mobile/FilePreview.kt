@@ -206,7 +206,9 @@ internal fun FilePreview() {
             file.isPreviewImage -> image = file
             else -> {
                 image = null
-                WorkspaceState.open(WorkspaceTab.Document(file))
+                WorkspaceState.open(
+                    if (file.isHtml) WorkspaceTab.Html(file) else WorkspaceTab.Document(file),
+                )
             }
         }
     }
@@ -248,24 +250,34 @@ internal fun WorkspaceFiles(sessionId: String) {
                         }
                 }
         }
-    Column(Modifier.padding(horizontal = 18.dp)) {
-        Text("会话文件", Modifier.padding(vertical = 14.dp), fontSize = 17.sp)
-        when {
-            files == null -> LinearProgressIndicator(Modifier.fillMaxWidth())
-            files.orEmpty().isEmpty() ->
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        contentPadding =
+            PaddingValues(
+                start = 18.dp,
+                end = 18.dp,
+                top = LocalWorkspaceTopInset.current,
+                bottom = 16.dp,
+            ),
+    ) {
+        item {
+            Text("会话文件", Modifier.padding(vertical = 14.dp), fontSize = 17.sp)
+            if (files == null) LinearProgressIndicator(Modifier.fillMaxWidth())
+            else if (files.orEmpty().isEmpty())
                 Text("本会话的附件和 Agent 发布的文件会显示在这里。", color = WhaleMuted, fontSize = 13.sp)
-            else ->
-                LazyColumn {
-                    items(files.orEmpty(), key = { it.id }) { file ->
-                        SettingsLink(
-                            if (file.isPreviewImage) AppIcons.Image else AppIcons.Description,
-                            file.name,
-                            formatFileSize(file.size),
-                        ) {
-                            FilePreviewState.open(file.id)
-                        }
-                    }
-                }
+        }
+        items(files.orEmpty(), key = { it.id }) { file ->
+            SettingsLink(
+                when {
+                    file.isPreviewImage -> AppIcons.Image
+                    file.isHtml -> AppIcons.Globe
+                    else -> AppIcons.Description
+                },
+                file.name,
+                formatFileSize(file.size),
+            ) {
+                FilePreviewState.open(file.id)
+            }
         }
     }
 }
@@ -285,33 +297,95 @@ private fun AttachmentPreview(
             value = withContext(Dispatchers.IO) { runCatching { store.file(id) } }
         }
     Surface(modifier, color = Color(0xFFFAF9F6)) {
-        Column(Modifier.fillMaxSize()) {
-            Row(
-                Modifier.fillMaxWidth()
-                    .height(54.dp)
-                    .background(Color.White)
-                    .padding(horizontal = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                if (closeImage != null) SmallIcon(AppIcons.ArrowBack, "关闭预览", action = closeImage)
-                Column(Modifier.weight(1f).padding(horizontal = 8.dp)) {
-                    Text(
-                        file.name,
-                        fontSize = 15.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(formatFileSize(file.size), fontSize = 10.sp, color = WhaleMuted)
-                }
-                val change =
-                    ChangeState.changes.lastOrNull {
-                        it.taskId == file.sourceTask && it.path == file.sourcePath
+        FadingHeaderLayout(
+            height = LocalWorkspaceTopInset.current + 54.dp,
+            sharedTop = LocalWorkspaceTopInset.current,
+            color = Color(0xFFFAF9F6),
+            header = {
+                Column {
+                    Spacer(Modifier.height(LocalWorkspaceTopInset.current))
+                    Row(
+                        Modifier.fillMaxWidth().height(54.dp).padding(horizontal = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        if (closeImage != null)
+                            SmallIcon(AppIcons.ArrowBack, "关闭预览", action = closeImage)
+                        Column(Modifier.weight(1f).padding(horizontal = 8.dp)) {
+                            Text(
+                                file.name,
+                                fontSize = 15.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(formatFileSize(file.size), fontSize = 10.sp, color = WhaleMuted)
+                        }
+                        val change =
+                            ChangeState.changes.lastOrNull {
+                                it.taskId == file.sourceTask && it.path == file.sourcePath
+                            }
+                        if (change != null)
+                            SmallIcon(AppIcons.Diff, "查看文件改动") { ChangeState.selected = change }
+                        LiquidMenuAnchor(
+                            settings,
+                            { settings = false },
+                            toggleAnchor = true,
+                            placement = MenuPlacement.Below,
+                            anchor = {
+                                SmallIcon(AppIcons.Settings, "预览设置") { settings = !settings }
+                            },
+                        ) {
+                            fun launch(intent: Intent) {
+                                runCatching { context.startActivity(intent) }
+                                    .onFailure { AgentService.current?.toast("没有可处理此文件的应用，请先导出副本") }
+                                settings = false
+                            }
+                            val uri = AttachmentDocuments.uri(context, id)
+                            GlassMenuRow(AppIcons.FolderOpen, "在文件管理器中查看", "只读会话文件目录", false) {
+                                val folder = AttachmentDocuments.sessionUri(context, file.sessionId)
+                                val browse =
+                                    Intent(Intent.ACTION_VIEW)
+                                        .setDataAndType(
+                                            folder,
+                                            DocumentsContract.Document.MIME_TYPE_DIR,
+                                        )
+                                        .addFlags(
+                                            Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                                                Intent.FLAG_GRANT_PREFIX_URI_PERMISSION,
+                                        )
+                                if (browse.resolveActivity(context.packageManager) != null)
+                                    launch(browse)
+                                else {
+                                    MainActivity.current?.browseAttachmentFolder(folder)
+                                    settings = false
+                                }
+                            }
+                            GlassMenuRow(AppIcons.ArrowOut, "在其他应用中打开", "原始文件 · 只读", false) {
+                                val intent =
+                                    Intent(Intent.ACTION_VIEW)
+                                        .setDataAndType(uri, file.mime)
+                                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                intent.clipData = ClipData.newRawUri(file.name, uri)
+                                launch(Intent.createChooser(intent, "打开 ${file.name}"))
+                            }
+                            GlassMenuRow(AppIcons.Description, "导出副本", "保存到你选择的位置，便于编辑", false) {
+                                MainActivity.current?.exportAttachment(id)
+                                settings = false
+                            }
+                            GlassMenuRow(AppIcons.Paperclip, "分享文件", "", false) {
+                                val intent =
+                                    Intent(Intent.ACTION_SEND)
+                                        .setType(file.mime)
+                                        .putExtra(Intent.EXTRA_STREAM, uri)
+                                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                intent.clipData = ClipData.newRawUri(file.name, uri)
+                                launch(Intent.createChooser(intent, "分享文件"))
+                            }
+                        }
                     }
-                if (change != null)
-                    SmallIcon(AppIcons.Diff, "查看文件改动") { ChangeState.selected = change }
-                SmallIcon(AppIcons.Settings, "预览设置") { settings = true }
-            }
-            Box(Modifier.weight(1f).fillMaxWidth()) {
+                }
+            },
+        ) { topInset ->
+            Box(Modifier.fillMaxSize()) {
                 val result = content
                 val data = result?.getOrNull()
                 when {
@@ -322,56 +396,11 @@ private fun AttachmentPreview(
                         )
                     data == null ->
                         Text("文件已不可用", Modifier.align(Alignment.Center), color = WhaleMuted)
-                    file.isPreviewImage -> ImagePreview(data)
-                    file.mime == "application/pdf" -> PdfPreview(data)
-                    else -> TextDocumentPreview(store, file)
+                    file.isPreviewImage ->
+                        Box(Modifier.padding(top = topInset)) { ImagePreview(data) }
+                    file.mime == "application/pdf" -> PdfPreview(data, topInset)
+                    else -> TextDocumentPreview(store, file, topInset)
                 }
-            }
-        }
-    }
-    if (settings) {
-        WhaleSheet("文件选项", file.name, { settings = false }) {
-            fun launch(intent: Intent) {
-                runCatching { context.startActivity(intent) }
-                    .onFailure { AgentService.current?.toast("没有可处理此文件的应用，请先导出副本") }
-                settings = false
-            }
-            val uri = AttachmentDocuments.uri(context, id)
-            OptionRow(AppIcons.FolderOpen, "在文件管理器中查看", "只读会话文件目录", false) {
-                val folder = AttachmentDocuments.sessionUri(context, file.sessionId)
-                val browse =
-                    Intent(Intent.ACTION_VIEW)
-                        .setDataAndType(folder, DocumentsContract.Document.MIME_TYPE_DIR)
-                        .addFlags(
-                            Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                                Intent.FLAG_GRANT_PREFIX_URI_PERMISSION,
-                        )
-                if (browse.resolveActivity(context.packageManager) != null) launch(browse)
-                else {
-                    MainActivity.current?.browseAttachmentFolder(folder)
-                    settings = false
-                }
-            }
-            OptionRow(AppIcons.ArrowOut, "在其他应用中打开", "原始文件 · 只读", false) {
-                val intent =
-                    Intent(Intent.ACTION_VIEW)
-                        .setDataAndType(uri, file.mime)
-                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                intent.clipData = ClipData.newRawUri(file.name, uri)
-                launch(Intent.createChooser(intent, "打开 ${file.name}"))
-            }
-            OptionRow(AppIcons.Description, "导出副本", "保存到你选择的位置，便于编辑", false) {
-                MainActivity.current?.exportAttachment(id)
-                settings = false
-            }
-            OptionRow(AppIcons.Paperclip, "分享文件", "", false) {
-                val intent =
-                    Intent(Intent.ACTION_SEND)
-                        .setType(file.mime)
-                        .putExtra(Intent.EXTRA_STREAM, uri)
-                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                intent.clipData = ClipData.newRawUri(file.name, uri)
-                launch(Intent.createChooser(intent, "分享文件"))
             }
         }
     }
@@ -459,7 +488,7 @@ private fun ImagePreview(file: File) {
 }
 
 @Composable
-private fun PdfPreview(file: File) {
+private fun PdfPreview(file: File, topInset: androidx.compose.ui.unit.Dp) {
     var count by remember(file) { mutableIntStateOf(0) }
     var error by remember(file) { mutableStateOf("") }
     LaunchedEffect(file) {
@@ -477,7 +506,8 @@ private fun PdfPreview(file: File) {
     else
         LazyColumn(
             Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(14.dp),
+            contentPadding =
+                PaddingValues(start = 14.dp, end = 14.dp, top = topInset + 14.dp, bottom = 14.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             items((0 until count).toList()) { index ->
@@ -552,7 +582,11 @@ private fun PdfPreview(file: File) {
 }
 
 @Composable
-private fun TextDocumentPreview(store: AttachmentStore, file: LocalAttachment) {
+private fun TextDocumentPreview(
+    store: AttachmentStore,
+    file: LocalAttachment,
+    topInset: androidx.compose.ui.unit.Dp,
+) {
     var content by remember(file.id) { mutableStateOf("") }
     LaunchedEffect(file.id) {
         content =
@@ -565,7 +599,7 @@ private fun TextDocumentPreview(store: AttachmentStore, file: LocalAttachment) {
         Column(
             Modifier.fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(22.dp)
+                .padding(start = 22.dp, end = 22.dp, top = topInset + 22.dp, bottom = 22.dp)
                 .background(Color.White, ContinuousShape(18.dp))
                 .padding(20.dp),
         ) {

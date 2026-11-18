@@ -11,13 +11,13 @@ internal enum class FontPreset(val key: String, val title: String, val detail: S
     OTHER("other", "其他字体", "系统提供的其他字族");
 
     companion object {
-        fun of(key: String) = entries.firstOrNull { it.key == key } ?: DEFAULT
+        fun of(key: String) = entries.firstOrNull { it.key == key } ?: ANTHROPIC
     }
 }
 
 /** User-owned appearance settings; never exposed as an Agent-writable configuration file. */
 internal object FontSettings {
-    var preset by mutableStateOf(FontPreset.DEFAULT)
+    var preset by mutableStateOf(FontPreset.ANTHROPIC)
     var otherFamily by mutableStateOf("serif")
     var scale by mutableFloatStateOf(1f)
     var weight by mutableIntStateOf(400)
@@ -35,7 +35,7 @@ internal object FontSettings {
         if (context != null) return
         context = ctx.applicationContext
         val p = ctx.getSharedPreferences("font-settings-v080", Context.MODE_PRIVATE)
-        preset = FontPreset.of(p.getString("preset", "default").orEmpty())
+        preset = FontPreset.of(p.getString("preset", null).orEmpty())
         otherFamily = p.getString("other", "serif").orEmpty()
         scale =
             p.getFloat(
@@ -65,7 +65,7 @@ internal object FontSettings {
     }
 
     fun reset() {
-        preset = FontPreset.DEFAULT
+        preset = FontPreset.ANTHROPIC
         scale = 1f
         weight = 400
         italic = false

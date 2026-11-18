@@ -60,39 +60,31 @@ internal fun TerminalCard(id: String) {
                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                 )
             }
-            Box {
-                IconButton(onClick = { copying = true }, modifier = Modifier.size(30.dp)) {
-                    Icon(
-                        AppIcons.ContentCopy,
-                        "复制命令或执行结果",
-                        Modifier.size(15.dp),
-                        tint = WhaleMuted,
-                    )
+            LiquidMenuAnchor(
+                copying,
+                { copying = false },
+                toggleAnchor = true,
+                anchor = {
+                    DshaIconButton("复制命令或执行结果", { copying = !copying }, size = 30.dp) {
+                        Icon(AppIcons.ContentCopy, null, Modifier.size(15.dp), tint = WhaleMuted)
+                    }
+                },
+            ) {
+                GlassMenuRow(AppIcons.Terminal, "复制命令") {
+                    clipboard.setText(AnnotatedString(run.command))
+                    copying = false
                 }
-                DropdownMenu(copying, { copying = false }) {
-                    DropdownMenuItem(
-                        text = { Text("复制命令") },
-                        onClick = {
-                            clipboard.setText(AnnotatedString(run.command))
-                            copying = false
-                        },
+                GlassMenuRow(AppIcons.Description, "复制执行结果") {
+                    clipboard.setText(
+                        AnnotatedString(
+                            run.output + if (run.stderr.isBlank()) "" else "\n" + run.stderr,
+                        ),
                     )
-                    DropdownMenuItem(
-                        text = { Text("复制执行结果") },
-                        onClick = {
-                            clipboard.setText(
-                                AnnotatedString(
-                                    run.output +
-                                        if (run.stderr.isBlank()) "" else "\n" + run.stderr,
-                                ),
-                            )
-                            copying = false
-                        },
-                    )
+                    copying = false
                 }
             }
         }
-        TextButton(onClick = { commandExpanded = !commandExpanded }) {
+        DshaTextButton(onClick = { commandExpanded = !commandExpanded }) {
             Text(
                 if (commandExpanded) "收起命令" else "完整命令",
                 fontSize = 10.sp,
@@ -147,7 +139,7 @@ internal fun TerminalCard(id: String) {
             Text("命令未启动 · ${run.errorCode}", fontSize = 10.sp, color = Color(0xFFB05B50))
         run.verifiedUid?.let { Text("执行通道 UID $it", fontSize = 10.sp, color = WhaleMuted) }
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = { outputExpanded = !outputExpanded }) {
+            DshaTextButton(onClick = { outputExpanded = !outputExpanded }) {
                 Text(
                     if (outputExpanded) "收起输出" else "展开输出",
                     fontSize = 10.sp,
@@ -155,7 +147,7 @@ internal fun TerminalCard(id: String) {
                 )
             }
             if (run.status in setOf("running", "reviewing", "waiting"))
-                TextButton(onClick = { manager.stop(id) }) {
+                DshaTextButton(onClick = { manager.stop(id) }) {
                     Text("停止", color = Color(0xFFB05B50), fontSize = 10.sp)
                 }
             Spacer(Modifier.weight(1f))
@@ -217,8 +209,13 @@ internal fun TerminalSettingsSheet(c: Conversation, close: () -> Unit) {
             }
         }
         if (tab == "environment") {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("终端环境", Modifier.weight(1f), fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                SandboxSwitch(c)
+            }
+            SandboxSelection(c)
             TerminalLevel.entries
-                .filter { it != TerminalLevel.ISOLATED }
+                .filter { it !in setOf(TerminalLevel.ISOLATED, TerminalLevel.SANDBOX) }
                 .forEachIndexed { index, level ->
                     Surface(
                         onClick = {
@@ -309,7 +306,7 @@ internal fun TerminalSettingsSheet(c: Conversation, close: () -> Unit) {
                 maxLines = 3,
                 visualTransformation = UprightSymbols.transformation,
             )
-            TextButton(
+            DshaTextButton(
                 onClick = {
                     try {
                         val result =
@@ -327,7 +324,7 @@ internal fun TerminalSettingsSheet(c: Conversation, close: () -> Unit) {
             ) {
                 Text("检查命令结构与规则")
             }
-            TextButton(
+            DshaTextButton(
                 onClick = {
                     manager?.revokeGrants()
                     message = "已清除所有类似命令授权"
@@ -357,7 +354,7 @@ internal fun TerminalSettingsSheet(c: Conversation, close: () -> Unit) {
                 visualTransformation = UprightSymbols.transformation,
             )
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                TextButton(
+                DshaTextButton(
                     onClick = {
                         MainActivity.current?.importTerminalConfig { imported ->
                             text = imported
@@ -367,7 +364,7 @@ internal fun TerminalSettingsSheet(c: Conversation, close: () -> Unit) {
                 ) {
                     Text("导入文件")
                 }
-                TextButton(
+                DshaTextButton(
                     onClick = {
                         MainActivity.current?.exportTerminalConfig(
                             "${c.terminalLevel}.${if (tab == "json") "commands.json" else "reviewer.toml"}",
@@ -379,7 +376,7 @@ internal fun TerminalSettingsSheet(c: Conversation, close: () -> Unit) {
                 }
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                TextButton(
+                DshaTextButton(
                     onClick = {
                         clipboard.setText(AnnotatedString(text))
                         message = "已复制配置"
@@ -387,7 +384,7 @@ internal fun TerminalSettingsSheet(c: Conversation, close: () -> Unit) {
                 ) {
                     Text("复制")
                 }
-                TextButton(
+                DshaTextButton(
                     onClick = {
                         text =
                             if (tab == "json") TerminalPolicy.defaults()
@@ -397,7 +394,7 @@ internal fun TerminalSettingsSheet(c: Conversation, close: () -> Unit) {
                 ) {
                     Text("默认")
                 }
-                Button(
+                DshaButton(
                     onClick = {
                         try {
                             val old = store.load(c.terminalLevel)

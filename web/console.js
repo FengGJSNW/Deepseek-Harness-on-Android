@@ -1,5 +1,7 @@
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+const sandbox = location.hash === '#sandbox';
+document.documentElement.classList.toggle('sandbox-console', sandbox);
 const terminal = new Terminal({
   fontFamily: 'DSHAMono, DSHACjk, monospace',
   fontSize: 13,
@@ -8,10 +10,10 @@ const terminal = new Terminal({
   scrollback: 3000,
   allowProposedApi: false,
   theme: {
-    background: '#FAFAF9',
-    foreground: '#2B3037',
+    background: sandbox ? '#000000' : '#FAFAF9',
+    foreground: sandbox ? '#E4E7EB' : '#2B3037',
     cursor: '#426EFE',
-    selectionBackground: '#DDE6FF',
+    selectionBackground: sandbox ? '#284366' : '#DDE6FF',
     black: '#343B44',
     red: '#BB5954',
     green: '#3C8669',

@@ -17,7 +17,6 @@ internal fun MemoryEditor(scopeName: String, projectId: String = "", close: () -
     WhaleSheet(
         when (scopeName) {
             "global" -> "全局记忆"
-            "session" -> "会话记忆"
             "persona" -> "人格记忆"
             else -> "项目共享记忆"
         },
@@ -42,7 +41,6 @@ internal fun MemoryEditor(scopeName: String, projectId: String = "", close: () -
             if (scopeName == "global") "memory.md · 所有 Work 会话共享"
             else
                 when (scopeName) {
-                    "session" -> "session_memory.md · 仅当前会话"
                     "persona" -> "persona_memory.md · 所有会话的角色偏好"
                     else -> "workplace_memory.md · 此项目的会话共享"
                 },
@@ -78,13 +76,13 @@ internal fun MemoryEditor(scopeName: String, projectId: String = "", close: () -
             Modifier.fillMaxWidth().padding(top = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            TextButton(
+            DshaTextButton(
                 onClick = { MainActivity.current?.importTerminalConfig { text = it } },
                 enabled = !busy,
             ) {
                 Text("导入")
             }
-            TextButton(
+            DshaTextButton(
                 onClick = {
                     MainActivity.current?.exportTerminalConfig(
                         snapshot?.filename ?: "memory.md",
@@ -95,9 +93,9 @@ internal fun MemoryEditor(scopeName: String, projectId: String = "", close: () -
                 Text("导出")
             }
             Spacer(Modifier.weight(1f))
-            Button(
+            DshaButton(
                 onClick = {
-                    val before = snapshot ?: return@Button
+                    val before = snapshot ?: return@DshaButton
                     busy = true
                     jobs.launch {
                         runCatching {

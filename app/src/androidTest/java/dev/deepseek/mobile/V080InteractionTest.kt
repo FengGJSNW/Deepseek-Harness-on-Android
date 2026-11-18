@@ -2,7 +2,6 @@ package dev.deepseek.mobile
 
 import android.view.View
 import android.view.ViewGroup
-import android.view.inputmethod.EditorInfo
 import android.view.inspector.WindowInspector
 import android.webkit.WebView
 import androidx.compose.ui.test.*
@@ -12,7 +11,6 @@ import dev.deepseek.mobile.harness.HarnessCoordinator
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.runBlocking
-import org.json.JSONObject
 import org.json.JSONTokener
 import org.junit.After
 import org.junit.Assert.*
@@ -58,115 +56,6 @@ class V080InteractionTest {
         }
         assertTrue(done.await(5, TimeUnit.SECONDS))
         return result
-    }
-
-    @Test
-    fun localTerminalTypingImeCtrlCAndSaveUseRealPty() {
-        ui.waitUntil(30000) { AssistantState.ready && DshaFonts.ready }
-        ui.runOnUiThread {
-            resetTransientUiForTest()
-            AssistantState.appMode = "work"
-            val chat = AssistantState.addSession()
-            chat.title = "终端交互验收"
-            LocalTerminalState.open(chat.id)
-        }
-        ui.waitUntil(60000) {
-            ui.onAllNodesWithText("Ctrl+C").fetchSemanticsNodes().isNotEmpty() && console() != null
-        }
-        val web = console()!!
-        var polls = 0
-        try {
-            ui.waitUntil(30000) {
-                val screen = js(web, "window.consoleText?.() || ''")
-                if (++polls % 50 == 0) {
-                    val target = InstrumentationRegistry.getInstrumentation().targetContext
-                    java.io
-                        .File(target.filesDir, "v080-terminal-debug.txt")
-                        .writeText(
-                            screen +
-                                "\n" +
-                                HarnessCoordinator.get(target).runtimes.states.value.toString() +
-                                "\n" +
-                                js(web, "document.body.innerText"),
-                        )
-                }
-                screen.contains("#")
-            }
-        } catch (error: Throwable) {
-            val target = InstrumentationRegistry.getInstrumentation().targetContext
-            java.io
-                .File(target.filesDir, "v080-terminal-debug.txt")
-                .writeText(
-                    js(
-                        web,
-                        "JSON.stringify({state:document.readyState,screen:window.consoleText?.(),native:typeof ConsoleNative,html:document.body.innerText.slice(0,2000)})",
-                    ) + "\n" + HarnessCoordinator.get(target).runtimes.states.value.toString(),
-                )
-            throw error
-        }
-        js(web, "window.consoleKey(${JSONObject.quote("printf 'TERM_OK_你好\\n'; stty size\r")})")
-        ui.waitUntil(20000) { js(web, "window.consoleText()").contains("TERM_OK_你好") }
-        js(
-            web,
-            "window.consoleKey(${JSONObject.quote("sh -c 'printf \"SLEEP_%s\\n\" RUNNING; exec sleep 30'\r")})",
-        )
-        // Wait for execution in the foreground child, not the terminal's input echo.
-        ui.waitUntil(15000) { js(web, "window.consoleText()").contains("SLEEP_RUNNING") }
-        ui.onNodeWithText("Ctrl+C").performClick()
-        js(web, "window.consoleKey(${JSONObject.quote("printf 'CTRL_%s\\n' OK\r")})")
-        ui.waitUntil(15000) { js(web, "window.consoleText()").contains("CTRL_OK") }
-        ui.runOnUiThread { web.requestFocus() }
-        js(
-            web,
-            "window.consoleKey(${JSONObject.quote("printf 'IME_OK_")}); document.querySelector('.xterm-helper-textarea').focus()",
-        )
-        var committed = false
-        ui.runOnUiThread {
-            val connection = web.onCreateInputConnection(EditorInfo())
-            committed = connection?.commitText("鲸鲸", 1) == true
-        }
-        assertTrue("WebView must accept a real Android IME input connection", committed)
-        try {
-            ui.waitUntil(10000) { js(web, "window.consoleText()").contains("IME_OK_鲸鲸") }
-        } catch (error: Throwable) {
-            java.io
-                .File(
-                    InstrumentationRegistry.getInstrumentation().targetContext.filesDir,
-                    "v080-ime-debug.txt",
-                )
-                .writeText(
-                    js(
-                        web,
-                        "JSON.stringify({screen:window.consoleText(),active:document.activeElement.tagName,value:document.activeElement.value,focus:document.hasFocus()})",
-                    ),
-                )
-            throw error
-        }
-        js(web, "window.consoleKey(${JSONObject.quote("\\n'\r")})")
-        js(
-            web,
-            "window.consoleKey(${JSONObject.quote("printf saved-from-pty > terminal-proof.txt; printf 'SAVED_%s\\n' OK\r")})",
-        )
-        ui.waitUntil(10000) { js(web, "window.consoleText()").contains("SAVED_OK") }
-        js(web, "window.consoleKey(${JSONObject.quote("exit\r")})")
-        ui.waitUntil(10000) {
-            ui.onAllNodesWithTag("terminal-process-exit").fetchSemanticsNodes().isNotEmpty()
-        }
-        ui.onNodeWithText("Ctrl+C").assertIsNotEnabled()
-        TestSnapshots.capture(ui, "v080-local-terminal")
-        ui.onNodeWithContentDescription("保存并关闭终端").performClick()
-        ui.waitUntil(120000) { LocalTerminalState.sessionId.isBlank() }
-        val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val workspace =
-            HarnessCoordinator.get(context)
-                .workspaces
-                .workspace(
-                    dev.deepseek.mobile.harness.WorkspaceScope(
-                        "session",
-                        AssistantState.selectedId,
-                    ),
-                )
-        assertEquals("saved-from-pty", java.io.File(workspace, "terminal-proof.txt").readText())
     }
 
     @Test

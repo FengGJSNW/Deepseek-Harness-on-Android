@@ -5,15 +5,10 @@ import android.graphics.Typeface
 import android.graphics.fonts.Font
 import android.graphics.fonts.FontStyle as AndroidFontStyle
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Typography
 import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontStyle
-import androidx.compose.ui.text.font.FontSynthesis
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Density
 import java.nio.ByteBuffer
 import java.util.concurrent.ConcurrentHashMap
@@ -102,9 +97,12 @@ internal object DshaFonts {
 
     fun native(
         role: FontRole,
-        weight: Int = if (FontSettings.knownFeatures) FontSettings.weight else 400,
-        italic: Boolean = FontSettings.knownFeatures && FontSettings.italic,
+        weight: Int =
+            if (role != FontRole.UI && FontSettings.knownFeatures) FontSettings.weight else 400,
+        italic: Boolean = role != FontRole.UI && FontSettings.knownFeatures && FontSettings.italic,
     ): Typeface {
+        if (role == FontRole.UI)
+            return Typeface.create(Typeface.create("sans-serif", Typeface.NORMAL), weight, false)
         val preset = FontSettings.preset
         if (preset == FontPreset.SYSTEM || !ready)
             return (if (role == FontRole.CODE) Typeface.MONOSPACE else Typeface.DEFAULT).let {
@@ -148,8 +146,9 @@ internal object DshaFonts {
 
     fun family(
         role: FontRole,
-        weight: Int = if (FontSettings.knownFeatures) FontSettings.weight else 400,
-        italic: Boolean = FontSettings.knownFeatures && FontSettings.italic,
+        weight: Int =
+            if (role != FontRole.UI && FontSettings.knownFeatures) FontSettings.weight else 400,
+        italic: Boolean = role != FontRole.UI && FontSettings.knownFeatures && FontSettings.italic,
     ) = FontFamily(native(role, weight, italic))
 
     val mono
@@ -183,39 +182,7 @@ internal fun FontEnvironment(content: @Composable () -> Unit) {
     FontSettings.revision
     DshaFonts.ready
     val base = LocalDensity.current
-    val family = DshaFonts.family(FontRole.UI)
-    fun TextStyle.adapt() =
-        copy(
-            fontFamily = family,
-            letterSpacing =
-                androidx.compose.ui.unit.TextUnit(0f, androidx.compose.ui.unit.TextUnitType.Sp),
-            fontFeatureSettings = DshaFonts.features,
-            fontSynthesis = FontSynthesis.Weight,
-            fontWeight =
-                if (FontSettings.knownFeatures) FontWeight(FontSettings.weight) else fontWeight,
-            fontStyle =
-                if (FontSettings.knownFeatures && FontSettings.italic) FontStyle.Italic
-                else fontStyle,
-        )
-    val defaults = Typography()
-    val typography =
-        defaults.copy(
-            displayLarge = defaults.displayLarge.adapt(),
-            displayMedium = defaults.displayMedium.adapt(),
-            displaySmall = defaults.displaySmall.adapt(),
-            headlineLarge = defaults.headlineLarge.adapt(),
-            headlineMedium = defaults.headlineMedium.adapt(),
-            headlineSmall = defaults.headlineSmall.adapt(),
-            titleLarge = defaults.titleLarge.adapt(),
-            titleMedium = defaults.titleMedium.adapt(),
-            titleSmall = defaults.titleSmall.adapt(),
-            bodyLarge = defaults.bodyLarge.adapt(),
-            bodyMedium = defaults.bodyMedium.adapt(),
-            bodySmall = defaults.bodySmall.adapt(),
-            labelLarge = defaults.labelLarge.adapt(),
-            labelMedium = defaults.labelMedium.adapt(),
-            labelSmall = defaults.labelSmall.adapt(),
-        )
+    val typography = PrismTypography.material
     CompositionLocalProvider(
         LocalDensity provides Density(base.density, base.fontScale * FontSettings.scale),
     ) {

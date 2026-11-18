@@ -2,9 +2,7 @@ package dev.deepseek.mobile
 
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.layout.*
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -19,11 +17,11 @@ import kotlin.math.sqrt
 import kotlinx.coroutines.delay
 
 internal data class PetMotionSettings(
-    val movement: Float = 24f,
-    val damping: Float = .42f,
+    val movement: Float = 20f,
+    val damping: Float = .27f,
     val interval: Int = 600,
-    val rate: Float = 1f,
-    val pressUnits: Int = 10,
+    val rate: Float = .55f,
+    val pressUnits: Int = 5,
 )
 
 internal suspend fun Animatable<Float, AnimationVector1D>.playPetBounce(
@@ -31,9 +29,12 @@ internal suspend fun Animatable<Float, AnimationVector1D>.playPetBounce(
     pressure: Float = 1f,
     variation: Int = 0,
 ) {
-    val push = (95 / tuning.rate).roundToInt()
     val hold = tuning.pressUnits * 10
-    val rebound = (255 / tuning.rate).roundToInt()
+    val interval = tuning.interval + variation
+    val travelTime =
+        (350 / tuning.rate).roundToInt().coerceAtMost((interval - hold).coerceAtLeast(2))
+    val push = (travelTime * 95f / 350).roundToInt().coerceIn(1, travelTime - 1)
+    val rebound = travelTime - push
     val damping = tuning.damping.toDouble()
     fun springTail(fraction: Float): Double {
         val time = fraction * 12.0
@@ -54,7 +55,7 @@ internal suspend fun Animatable<Float, AnimationVector1D>.playPetBounce(
                 },
         ),
     )
-    delay((tuning.interval + variation - push - hold - rebound).coerceAtLeast(0).toLong())
+    delay((interval - hold - travelTime).coerceAtLeast(0).toLong())
 }
 
 @Composable
@@ -63,44 +64,46 @@ internal fun WhaleMotionSettings() {
     val squish = remember { Animatable(0f) }
     val travel = remember { Animatable(0f) }
     var preview by remember { mutableStateOf(true) }
-    val density = androidx.compose.ui.platform.LocalDensity.current
+    var facingRight by remember { mutableStateOf(false) }
     LaunchedEffect(settings, preview) {
         squish.snapTo(0f)
         if (preview && android.animation.ValueAnimator.areAnimatorsEnabled())
             while (true) squish.playPetBounce(settings)
-    }
-    LaunchedEffect(settings.movement, preview, density) {
-        travel.snapTo(0f)
-        if (preview && android.animation.ValueAnimator.areAnimatorsEnabled()) {
-            val duration = (48 / settings.movement * 1000).roundToInt()
-            val distance = with(density) { 24.dp.toPx() }
-            while (true) {
-                travel.animateTo(distance, tween(duration / 2, easing = LinearEasing))
-                travel.animateTo(-distance, tween(duration, easing = LinearEasing))
-                travel.animateTo(0f, tween(duration / 2, easing = LinearEasing))
-            }
-        }
     }
     fun save(value: PetMotionSettings) {
         ExperienceSettings.petMotion = value
     }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text("弹动预览", Modifier.weight(1f), fontSize = 14.sp)
-        TextButton(onClick = { preview = !preview }) { Text(if (preview) "暂停" else "播放") }
-        TextButton(
-            onClick = {
-                save(PetMotionSettings())
-                ExperienceSettings.save()
-            },
-        ) {
-            Text("恢复默认")
-        }
+        DshaTextButton(onClick = { preview = !preview }) { Text(if (preview) "暂停" else "播放") }
     }
-    Box(Modifier.fillMaxWidth().height(94.dp), contentAlignment = Alignment.Center) {
+    BoxWithConstraints(Modifier.fillMaxWidth().height(94.dp), contentAlignment = Alignment.Center) {
+        val distance = ((maxWidth - 88.dp) / 2).coerceIn(0.dp, 120.dp)
+        val density = androidx.compose.ui.platform.LocalDensity.current
+        LaunchedEffect(settings.movement, preview, distance, density) {
+            travel.snapTo(0f)
+            facingRight = false
+            if (
+                preview && distance > 0.dp && android.animation.ValueAnimator.areAnimatorsEnabled()
+            ) {
+                val duration =
+                    (distance.value / settings.movement * 1000).roundToInt().coerceAtLeast(16)
+                val pixels = with(density) { distance.toPx() }
+                travel.animateTo(-pixels, tween(duration, easing = LinearEasing))
+                while (true) {
+                    facingRight = true
+                    travel.animateTo(pixels, tween(duration * 2, easing = LinearEasing))
+                    facingRight = false
+                    travel.animateTo(-pixels, tween(duration * 2, easing = LinearEasing))
+                }
+            }
+        }
         WhalePet(
             size = 72,
+            style = AssistantState.petStyle,
             gesture = Modifier.graphicsLayer { translationX = travel.value },
             showBubble = false,
+            facingRight = facingRight,
             patrolCompression = { squish.value },
         )
     }
@@ -124,6 +127,14 @@ internal fun WhaleMotionSettings() {
     ) {
         save(settings.copy(pressUnits = it.roundToInt()))
     }
+    DshaTextButton(
+        onClick = {
+            save(PetMotionSettings())
+            ExperienceSettings.save()
+        },
+    ) {
+        Text("恢复默认")
+    }
 }
 
 @Composable
@@ -139,6 +150,11 @@ private fun MotionSlider(
             Text(label, fontSize = 13.sp)
             Text(display, fontSize = 12.sp, color = WhaleMuted)
         }
-        Slider(value, change, valueRange = range, onValueChangeFinished = ExperienceSettings::save)
+        CleanSlider(
+            value,
+            change,
+            valueRange = range,
+            onValueChangeFinished = ExperienceSettings::save,
+        )
     }
 }

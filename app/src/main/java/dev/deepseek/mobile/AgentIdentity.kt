@@ -64,7 +64,7 @@ internal enum class AvatarPhase(val label: String) {
 }
 
 internal object AgentIdentity {
-    const val DEFAULT_NAME = "小鲸鱼娘"
+    const val DEFAULT_NAME = "鲸鱼娘"
     private const val MAX_AVATAR_BYTES = 8 * 1024 * 1024
     var name by mutableStateOf(DEFAULT_NAME)
         private set
@@ -361,7 +361,7 @@ internal fun AgentIdentitySettings() {
             Text(AgentIdentity.mode.title, fontSize = 12.sp, color = WhaleMuted)
         }
         if (AgentIdentity.mode == AvatarMode.DOTS)
-            TextButton(
+            DshaTextButton(
                 onClick = {
                     val stages = AvatarPhase.entries.drop(1)
                     phase = stages[(stages.indexOf(phase) + 1) % stages.size]
@@ -378,7 +378,7 @@ internal fun AgentIdentitySettings() {
         label = { Text("Agent 显示名称") },
     )
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        Button(
+        DshaButton(
             onClick = {
                 AgentIdentity.rename(context, draft)
                 focus.clearFocus()
@@ -387,7 +387,7 @@ internal fun AgentIdentitySettings() {
         ) {
             Text("保存名称")
         }
-        TextButton(
+        DshaTextButton(
             onClick = {
                 AgentIdentity.rename(context, AgentIdentity.DEFAULT_NAME)
                 draft = AgentIdentity.DEFAULT_NAME
@@ -416,7 +416,7 @@ internal fun AgentIdentitySettings() {
         }
     }
     if (AgentIdentity.image != null)
-        TextButton(onClick = { pickAvatar() }, enabled = !busy) {
+        DshaTextButton(onClick = { pickAvatar() }, enabled = !busy) {
             Text("更换自定义图片")
         }
     if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())

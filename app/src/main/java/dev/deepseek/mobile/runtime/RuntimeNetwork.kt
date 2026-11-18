@@ -15,6 +15,7 @@ internal class RuntimeNetwork(
     private val scope: CoroutineScope,
     private val allowed: () -> Boolean,
     private val send: (JSONObject) -> Unit,
+    private val publicOnly: Boolean = false,
     private val proxyPort: () -> Int?,
 ) {
     private data class Stream(val socket: Socket, val queue: Channel<ByteArray>, val job: Job)
@@ -86,7 +87,17 @@ internal class RuntimeNetwork(
                                     check(proxyPort() == port) { "当前代理未启用" }
                                     "127.0.0.1"
                                 } else host
-                            socket.connect(InetSocketAddress(destination, port), 15000)
+                            val endpoint =
+                                if (publicOnly) {
+                                    val address =
+                                        java.net.InetAddress.getAllByName(destination).firstOrNull {
+                                            publicIpv4(it.address) &&
+                                                java.net.NetworkInterface.getByInetAddress(it) ==
+                                                    null
+                                        } ?: error("Sandbox 仅可连接公网 IPv4 地址")
+                                    InetSocketAddress(address, port)
+                                } else InetSocketAddress(destination, port)
+                            socket.connect(endpoint, 15000)
                             socket.tcpNoDelay = true
                             socket.soTimeout = 1000
                             coroutineScope {
@@ -168,6 +179,7 @@ internal class RuntimeNetwork(
                 try {
                     java.net.InetAddress.getAllByName(host)
                         .map { it.address }
+                        .filter { !publicOnly || publicIpv4(it) }
                         .filter { (type == 1 && it.size == 4) || (type == 28 && it.size == 16) }
                         .take(16)
                 } catch (_: java.net.UnknownHostException) {
@@ -206,5 +218,20 @@ internal class RuntimeNetwork(
 
     fun close() {
         streams.keys.toList().forEach { close(it, 2) }
+    }
+
+    private fun publicIpv4(address: ByteArray): Boolean {
+        if (address.size != 4) return false
+        val a = address[0].toInt() and 255
+        val b = address[1].toInt() and 255
+        val c = address[2].toInt() and 255
+        return a in 1..223 &&
+            a !in setOf(10, 127) &&
+            !(a == 100 && b in 64..127) &&
+            !(a == 169 && b == 254) &&
+            !(a == 172 && b in 16..31) &&
+            !(a == 192 && (b == 168 || b == 0 && c in setOf(0, 2) || b == 88 && c == 99)) &&
+            !(a == 198 && (b in 18..19 || b == 51 && c == 100)) &&
+            !(a == 203 && b == 0 && c == 113)
     }
 }

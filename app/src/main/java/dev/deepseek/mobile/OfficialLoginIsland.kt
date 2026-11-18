@@ -57,11 +57,11 @@ internal fun OfficialLoginIsland() {
                     )
                 }
                 if (waiting || chat.failure.isNotBlank())
-                    TextButton(onClick = { chat.retry(context) }) { Text("重新连接") }
+                    DshaTextButton(onClick = { chat.retry(context) }) { Text("重新连接") }
             } else {
                 val password = auth.mode == "password"
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-                    TextButton(
+                    DshaTextButton(
                         onClick = {
                             credential = TextFieldValue()
                             chat.setLoginMode("sms")
@@ -70,7 +70,7 @@ internal fun OfficialLoginIsland() {
                     ) {
                         Text("验证码登录", color = if (!password) WhaleBlue else WhaleMuted)
                     }
-                    TextButton(
+                    DshaTextButton(
                         onClick = {
                             credential = TextFieldValue()
                             chat.setLoginMode("password")
@@ -106,11 +106,11 @@ internal fun OfficialLoginIsland() {
                     },
                     trailingIcon = {
                         if (password)
-                            TextButton(onClick = { visible = !visible }) {
+                            DshaTextButton(onClick = { visible = !visible }) {
                                 Text(if (visible) "隐藏" else "显示", fontSize = 12.sp)
                             }
                         else
-                            TextButton(
+                            DshaTextButton(
                                 onClick = {
                                     chat.submitLogin(
                                         "sms",
@@ -156,7 +156,7 @@ internal fun OfficialLoginIsland() {
                             color = WhaleMuted,
                         )
                         Row {
-                            TextButton(
+                            DshaTextButton(
                                 onClick = {
                                     uri.openUri(
                                         "https://cdn.deepseek.com/policies/zh-CN/deepseek-terms-of-use.html",
@@ -166,7 +166,7 @@ internal fun OfficialLoginIsland() {
                             ) {
                                 Text("用户协议", fontSize = 11.sp)
                             }
-                            TextButton(
+                            DshaTextButton(
                                 onClick = {
                                     uri.openUri(
                                         "https://cdn.deepseek.com/policies/zh-CN/deepseek-privacy-policy.html",
@@ -181,7 +181,7 @@ internal fun OfficialLoginIsland() {
                 }
                 if (!password)
                     Text("未注册的手机号将由 DeepSeek 自动注册。", fontSize = 11.sp, color = WhaleMuted)
-                Button(
+                DshaButton(
                     onClick = { chat.submitLogin(auth.mode, account.text.trim(), credential.text) },
                     enabled =
                         agreed &&
@@ -195,7 +195,7 @@ internal fun OfficialLoginIsland() {
                     Text(if (chat.authBusy) "正在提交…" else "登录并进入 Chat")
                 }
                 if (auth.challenge && !verification)
-                    TextButton(onClick = { verification = true }) { Text("完成官方安全验证") }
+                    DshaTextButton(onClick = { verification = true }) { Text("完成官方安全验证") }
             }
             val message = chat.failure.ifBlank { auth.error }
             if (message.isNotBlank())

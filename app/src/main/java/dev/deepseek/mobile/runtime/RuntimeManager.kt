@@ -15,7 +15,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 internal enum class RuntimeKind(val id: String, val title: String, val available: Boolean) {
-    LIGHT("light", "DSHA Light", true),
+    LIGHT("light", "DSHA Lite", true),
     ALPINE("alpine", "Alpine Linux", true),
     DEBIAN("debian", "Debian", false),
     UBUNTU("ubuntu", "Ubuntu", false);
@@ -54,7 +54,7 @@ internal data class RuntimeInfo(
 internal data class RuntimeTerminal(
     val vm: LinuxVm,
     val id: String,
-    val tree: Worktree,
+    val tree: Worktree?,
     val scope: WorkspaceScope,
 )
 
@@ -68,6 +68,7 @@ internal class RuntimeManager(
         val vm: LinuxVm,
         val imported: MutableSet<String> = mutableSetOf(),
         var terminal: RuntimeTerminal? = null,
+        var disks: List<SandboxDisk> = emptyList(),
     )
 
     private val root = File(context.filesDir, "runtimes/instances").canonicalFile.apply { mkdirs() }
@@ -87,15 +88,22 @@ internal class RuntimeManager(
                 runCatching {
                     val j = JSONObject(String(AtomicFile(file).readFully()))
                     val scope = WorkspaceScope(j.getString("scopeKind"), j.getString("scopeId"))
+                    if (scope.kind != "sandbox") return@forEach
                     val old = j.getString("phase")
                     val interrupted = old in setOf("initializing", "resetting", "saving", "running")
+                    val suspended = scope.kind == "sandbox" && old == "ready"
                     _states.value +=
                         scope.key to
                             RuntimeInfo(
                                 scope,
                                 RuntimeKind.of(j.getString("kind")),
-                                if (interrupted) "interrupted" else old,
-                                if (interrupted) "上次操作中断，将从最后保存的状态恢复" else j.optString("detail"),
+                                if (interrupted) "interrupted"
+                                else if (suspended) "suspended" else old,
+                                when {
+                                    interrupted -> "上次操作中断，将从最后保存的状态恢复"
+                                    suspended -> "实例已保存，连接时恢复"
+                                    else -> j.optString("detail")
+                                },
                                 j.optLong("savedAt"),
                                 j.optInt("generation", 1),
                                 RuntimeLifetime.valueOf(j.optString("lifetime", "PERSISTENT")),
@@ -114,14 +122,15 @@ internal class RuntimeManager(
 
     fun info(scope: WorkspaceScope) = _states.value[scope.key] ?: RuntimeInfo(scope)
 
-    fun scope(task: PhoneTask) =
-        if (task.projectId.isNotBlank()) WorkspaceScope("project", task.projectId)
+    fun scope(task: PhoneTask, sandboxId: String = task.sandboxId) =
+        if (sandboxId.isNotBlank()) WorkspaceScope("sandbox", sandboxId)
+        else if (task.projectId.isNotBlank()) WorkspaceScope("project", task.projectId)
         else WorkspaceScope("session", task.sessionId)
 
     suspend fun prepareTask(task: PhoneTask): WorkspaceScope =
         withContext(Dispatchers.IO) {
             val scope = scope(task)
-            workspaces.migrateLegacy(scope, task.sessionId)
+            if (scope.kind == "sandbox") return@withContext scope
             val marker = File(context.filesDir, "harness/imports/${task.id}.json")
             if (task.files.isNotEmpty() && !marker.isFile) {
                 val store = dev.deepseek.mobile.AttachmentStore(context)
@@ -160,8 +169,8 @@ internal class RuntimeManager(
             scope
         }
 
-    private fun directory(scope: WorkspaceScope) =
-        File(root, "${scope.kind}/${scope.id}").apply { mkdirs() }
+    private fun directory(scope: WorkspaceScope, create: Boolean = true) =
+        File(root, "${scope.kind}/${scope.id}").apply { if (create) mkdirs() }
 
     private suspend fun update(info: RuntimeInfo) {
         android.util.Log.d("DSHA-Runtime", "${info.scope.key} ${info.phase}: ${info.detail}")
@@ -181,6 +190,23 @@ internal class RuntimeManager(
 
     /** One shared machine uses the strongest network restriction of its participating sessions. */
     fun networkAllowed(scope: WorkspaceScope): Boolean {
+        if (scope.kind == "sandbox") {
+            val record = SandboxManager.get(context).get(scope.id) ?: return false
+            if (!record.internet || record.deleting) return false
+            return AssistantState.sessions
+                .filter { record.allows(it.id, it.projectId) }
+                .all {
+                    val policy =
+                        PermissionContext(
+                            sessionId = it.id,
+                            projectId = it.projectId,
+                            environment = "sandbox",
+                        )
+                    !permissions.requiresBroker(policy, setOf(Capability.NETWORK)) &&
+                        permissions.evaluate(policy, Capability.NETWORK).effect ==
+                            PermissionEffect.ALLOW
+                }
+        }
         val sessions =
             AssistantState.sessions.filter {
                 if (scope.kind == "project") it.projectId == scope.id else it.id == scope.id
@@ -201,6 +227,7 @@ internal class RuntimeManager(
     }
 
     private suspend fun machine(scope: WorkspaceScope): Active {
+        require(scope.kind == "sandbox") { "请在 Sandbox 管理中创建实例，再为会话授权" }
         active[scope.key]?.let {
             if (it.vm.failed.isEmpty()) return it
             // A dead renderer cannot checkpoint. Restore a fresh VM from the last committed state.
@@ -219,21 +246,32 @@ internal class RuntimeManager(
         update(record.copy(phase = "initializing", detail = "准备独立 Linux 环境"))
         if (record.lifetime == RuntimeLifetime.TEMPORARY) clearDirectory(scope)
         val dir = directory(scope)
-        val vm = LinuxVm(context, dir) { networkAllowed(scope) }
+        val preset = requireNotNull(SandboxManager.get(context).get(scope.id)).preset
+        val vm =
+            LinuxVm(
+                context,
+                dir,
+                publicNetworkOnly = true,
+                release = preset.release,
+            ) {
+                networkAllowed(scope)
+            }
         try {
-            if (!File(dir, "machine.state").isFile && record.kind == RuntimeKind.LIGHT) {
-                prepareTemplate(scope)
+            val boot = vm.start { progress ->
+                val current = info(scope)
+                _states.value += scope.key to current.copy(detail = progress)
+            }
+            if (!boot.optBoolean("restored")) initializeAlpine(vm, scope)
+            if (!boot.optBoolean("restored") || !File(dir, "preset-ready.json").isFile) {
+                prepareLightPackages(vm, scope, { bootstrapAllowed(scope) }, preset)
+                vm.snapshot()
                 withContext(Dispatchers.IO) {
-                    File(template, "machine.state")
-                        .copyTo(File(dir, "machine.state"), overwrite = false)
+                    File(dir, "preset-ready.json").writeText(preset.json().toString())
                 }
             }
-            val boot = vm.start()
-            if (!boot.optBoolean("restored"))
-                initializeAlpine(vm, scope, installTools = record.kind == RuntimeKind.LIGHT)
             val entry = Active(vm)
+            entry.disks = SandboxDisks.get(context).attach(vm, scope.id)
             active[scope.key] = entry
-            workspaces.recover(scope)
             record =
                 record.copy(
                     phase = "ready",
@@ -252,20 +290,33 @@ internal class RuntimeManager(
         }
     }
 
+    private fun bootstrapAllowed(scope: WorkspaceScope): Boolean {
+        if (scope.kind != "sandbox") return networkAllowed(scope)
+        val policy = PermissionContext(sessionId = "", environment = "sandbox")
+        return !permissions.requiresBroker(policy, setOf(Capability.NETWORK)) &&
+            permissions.evaluate(policy, Capability.NETWORK).effect == PermissionEffect.ALLOW
+    }
+
     private suspend fun prepareTemplate(scope: WorkspaceScope) {
         val ready = File(template, "ready.json")
-        if (File(template, "machine.state").isFile && ready.isFile) return
-        check(networkAllowed(scope)) { "基础工具尚未下载，当前网络规则不允许初始化" }
+        if (File(template, "machine.state").isFile && ready.isFile) {
+            return
+        }
+        val managed = scope.kind == "sandbox"
         update(info(scope).copy(phase = "initializing", detail = "首次准备工具链：Git、SSH、Python、Node…"))
-        val vm = LinuxVm(context, template) { networkAllowed(scope) }
+        val vm =
+            LinuxVm(context, template, publicNetworkOnly = managed) {
+                bootstrapAllowed(scope)
+            }
         try {
-            val boot = vm.start()
+            val boot = vm.start { progress ->
+                _states.value += scope.key to info(scope).copy(detail = progress)
+            }
             if (!boot.optBoolean("restored")) {
-                initializeAlpine(vm, scope, installTools = true)
-                // Keep installed packages across a failed executable probe; never mark them ready
-                // yet.
+                initializeAlpine(vm, scope)
                 vm.snapshot()
             }
+            prepareLightPackages(vm, scope, { bootstrapAllowed(scope) })
             val probes = JSONObject()
             try {
                 for ((name, command) in
@@ -307,30 +358,124 @@ internal class RuntimeManager(
         }
     }
 
+    private suspend fun prepareLightPackages(
+        vm: LinuxVm,
+        scope: WorkspaceScope,
+        allowed: () -> Boolean,
+        preset: SandboxPreset = SandboxPreset(),
+    ) {
+        val repository = "/var/cache/dsha-repo"
+        val root = "/mnt/alpine"
+        val options = "--no-network --repositories-file $repository/repositories"
+        val bundled =
+            preset.offlineTools &&
+                preset.release == AlpineRelease.V324 &&
+                !preset.nodeCurrent &&
+                RuntimeImages.get(context).hasImage("tools")
+        suspend fun packageFile(path: String): ByteArray =
+            if (bundled) RuntimeImages.get(context).toolPackage(path)
+            else RuntimeArtifacts.lightRepositoryFile(context, path, preset.release, allowed)
+        val packagePath =
+            Regex("/var/cache/dsha-repo/((?:main|community)/x86/[A-Za-z0-9._+~-]+[.]apk)")
+        var indexed = false
+        for ((label, packages) in preset.packages) {
+            val installed =
+                vm.execute(
+                    "for package in $packages; do apk info -e \"\$package\" || exit 1; done",
+                    root = root,
+                    timeout = 15,
+                )
+            if (installed.optInt("exitCode", -1) == 0) continue
+            if (!indexed) {
+                update(
+                    info(scope)
+                        .copy(
+                            phase = "initializing",
+                            detail = if (bundled) "使用 DSHA Tool 签名索引" else "下载 Alpine 签名索引",
+                        ),
+                )
+                for (repo in listOf("main", "community")) {
+                    val path = "$repo/x86/APKINDEX.tar.gz"
+                    vm.guestWrite(
+                        "/alpine$repository/$path",
+                        packageFile(path),
+                    )
+                }
+                vm.guestWrite(
+                    "/alpine$repository/repositories",
+                    ("$repository/main\n$repository/community\n").toByteArray(),
+                )
+                indexed = true
+            }
+            val plan =
+                vm.execute(
+                    "apk $options fetch --recursive --url --simulate $packages",
+                    root = root,
+                    timeout = 60,
+                )
+            checkResult(plan, "解析 $label 依赖")
+            val paths =
+                packagePath
+                    .findAll(plan.getString("stdout"))
+                    .map { it.groupValues[1] }
+                    .distinct()
+                    .toList()
+            check(paths.size in 1..128) { "Alpine 未返回有效的 $label 下载清单" }
+            var bytes = 0L
+            for ((index, path) in paths.withIndex()) {
+                _states.value +=
+                    scope.key to
+                        info(scope)
+                            .copy(
+                                detail =
+                                    "${if (bundled) "读取" else "下载"} $label · ${index + 1}/${paths.size}",
+                            )
+                val archive = packageFile(path)
+                bytes += archive.size
+                check(bytes <= 384L * 1024 * 1024) { "工具链包超过下载上限" }
+                vm.guestWrite("/alpine$repository/$path", archive)
+            }
+            update(info(scope).copy(phase = "initializing", detail = "校验签名并安装 $label"))
+            checkResult(
+                vm.execute(
+                    "apk $options add $packages",
+                    root = root,
+                    timeout = 600,
+                    preparingBase = true,
+                ),
+                "安装 $label",
+            )
+            checkResult(
+                vm.execute(
+                    "rm -f $repository/main/x86/*.apk $repository/community/x86/*.apk",
+                    root = root,
+                ),
+                "清理临时安装包",
+            )
+            vm.snapshot()
+        }
+        checkResult(vm.execute("rm -rf $repository", root = root), "清理临时软件源")
+    }
+
     private suspend fun initializeAlpine(
         vm: LinuxVm,
         scope: WorkspaceScope,
-        installTools: Boolean,
     ) {
-        update(info(scope).copy(phase = "initializing", detail = "初始化 Linux 文件系统"))
+        val largeImage = info(scope).kind == RuntimeKind.LIGHT
+        update(
+            info(scope)
+                .copy(
+                    phase = "initializing",
+                    detail = if (largeImage) "首次解压本地工具链，请稍候" else "初始化 Linux 文件系统",
+                ),
+        )
         checkResult(
             vm.execute(
                 "set -e; gzip -dc /mnt/alpine.tar.gz | tar -xf - -C /mnt/alpine; mkdir -p /mnt/alpine/proc /mnt/alpine/dev /mnt/alpine/sys /mnt/alpine/workspace; mount -t proc proc /mnt/alpine/proc; mount --rbind /dev /mnt/alpine/dev; mount -t sysfs sysfs /mnt/alpine/sys; printf 'nameserver 192.168.86.1\\n' > /mnt/alpine/etc/resolv.conf; udhcpc -i eth0 -q -n",
-                timeout = 90,
+                timeout = if (largeImage) 300 else 90,
             ),
             "Linux 初始化",
         )
-        if (installTools) {
-            update(info(scope).copy(phase = "initializing", detail = "安装独立工具链，首次准备需要一些时间"))
-            checkResult(
-                vm.execute(
-                    "apk add --no-cache bash git openssh-client curl python3 py3-pip nodejs npm",
-                    root = "/mnt/alpine",
-                    timeout = 300,
-                ),
-                "工具链安装",
-            )
-        }
     }
 
     private fun checkResult(result: JSONObject, stage: String) {
@@ -522,7 +667,12 @@ internal class RuntimeManager(
         onStarted: () -> Unit = {},
         onOutput: (String, String) -> Unit = { _, _ -> },
         worktreeId: String = task.id,
+        sandboxId: String = task.sandboxId,
     ): JSONObject = lock.withLock {
+        require(sandboxId.isNotBlank()) { "请选择已授权的 Sandbox，不再自动创建项目或会话运行环境" }
+        check(sandboxId.isBlank() && !task.sandboxOnly || task.acceptsSandbox(sandboxId)) {
+            "此 Sandbox 不在本任务获准访问的范围内"
+        }
         val policy = PermissionContext(sessionId = task.sessionId, projectId = task.projectId)
         check(
             !permissions.requiresBroker(
@@ -532,11 +682,10 @@ internal class RuntimeManager(
         ) {
             "当前文件规则需要逐路径审查，请使用 workspace_read/write；完整 Linux 程序不能绕过文件限制"
         }
-        val scope = prepareTask(task)
-        val entry = machine(scope)
-        check(entry.terminal == null) { "此工作域的本地终端正在使用环境，请关闭后重试" }
-        val tree = withContext(Dispatchers.IO) { workspaces.begin(scope, worktreeId, task.id) }
-        val path = importTree(entry, tree)
+        val record = SandboxManager.get(context).requireAccess(sandboxId, task)
+        val scope = record.scope
+        val entry = managedMachine(record)
+        importManagedAttachments(task, scope, entry)
         update(info(scope).copy(phase = "running", detail = "正在执行终端命令"))
         try {
             val result =
@@ -546,33 +695,28 @@ internal class RuntimeManager(
                     timeout,
                     limit,
                     root = "/mnt/alpine",
-                    tree = path,
                     onStarted = onStarted,
                     onOutput = onOutput,
-                    useMihomo = true,
                 )
-            exportTree(entry, tree)
             checkpoint(scope.key, entry)
-            result
+            return@withLock result
                 .put("runtime", info(scope).json())
-                .put("worktreeId", tree.taskId)
+                .put("sandboxId", sandboxId)
                 .put("workspace", "/workspace")
-        } catch (error: CancellationException) {
+        } catch (error: Throwable) {
             withContext(NonCancellable) {
                 entry.vm.close()
                 active.remove(scope.key)
-                update(info(scope).copy(phase = "interrupted", detail = "命令已打断，保留最后完整检查点"))
+                update(info(scope).copy(phase = "interrupted", detail = "命令中断，保留最近的完整检查点"))
             }
-            throw error
-        } catch (error: Throwable) {
-            update(info(scope).copy(phase = "broken", detail = error.message.orEmpty()))
             throw error
         }
     }
 
     private suspend fun checkpoint(key: String, entry: Active) {
         val record = _states.value[key] ?: return
-        update(record.copy(phase = "saving", detail = "保存环境与包修改"))
+        update(record.copy(phase = "saving", detail = "保存环境与数据磁盘"))
+        SandboxDisks.get(context).save(entry.vm, entry.disks)
         entry.vm.snapshot()
         update(
             record.copy(
@@ -587,7 +731,9 @@ internal class RuntimeManager(
         task: PhoneTask,
         onData: (String, ByteArray) -> Unit = { _, _ -> },
         onExit: (String, Int) -> Unit = { _, _ -> },
+        sandboxId: String = "",
     ): RuntimeTerminal = lock.withLock {
+        require(sandboxId.isNotBlank()) { "请先选择一个 Sandbox，再打开用户终端" }
         val policy =
             PermissionContext(
                 sessionId = task.sessionId,
@@ -608,15 +754,22 @@ internal class RuntimeManager(
         ) {
             "当前用户文件规则需要逐路径审查，不能开放任意程序终端"
         }
-        val scope = prepareTask(task)
+        val sandbox = sandboxId.let {
+            requireNotNull(SandboxManager.get(context).get(it)) { "Sandbox 已删除" }
+                .also { record ->
+                    check(!record.deleting) { "Sandbox 正在删除" }
+                    if (info(record.scope).phase == "not_initialized")
+                        update(info(record.scope).copy(kind = record.base))
+                }
+        }
+        val scope = sandbox.scope
         val entry = machine(scope)
         check(entry.terminal == null) { "此工作域已有本地终端" }
-        val tree = withContext(Dispatchers.IO) { workspaces.begin(scope, task.id) }
-        val guest = importTree(entry, tree)
+        val guest = "-"
         entry.vm.onPty = onData
         entry.vm.onPtyExit = onExit
         val id = entry.vm.openPty(root = "/mnt/alpine", tree = guest)
-        RuntimeTerminal(entry.vm, id, tree, scope).also {
+        RuntimeTerminal(entry.vm, id, null, scope).also {
             entry.terminal = it
             update(info(scope).copy(phase = "running", detail = "本地交互终端"))
         }
@@ -633,7 +786,7 @@ internal class RuntimeManager(
         }
         try {
             terminal.vm.closePty(terminal.id)
-            exportTree(entry, terminal.tree)
+            terminal.tree?.let { exportTree(entry, it) }
             checkpoint(terminal.scope.key, entry)
         } finally {
             entry.terminal = null
@@ -666,7 +819,12 @@ internal class RuntimeManager(
         method: String,
         args: JSONObject,
         worktreeId: String = task.id,
+        sandboxId: String = task.sandboxId,
     ): JSONObject = lock.withLock {
+        check(sandboxId.isBlank() && !task.sandboxOnly || task.acceptsSandbox(sandboxId)) {
+            "此 Sandbox 不在本任务获准访问的范围内"
+        }
+        if (sandboxId.isNotBlank()) return@withLock managedFile(task, sandboxId, method, args)
         val scope = prepareTask(task)
         val tree = withContext(Dispatchers.IO) { workspaces.begin(scope, worktreeId, task.id) }
         val live = active[scope.key]
@@ -788,7 +946,25 @@ internal class RuntimeManager(
         task: PhoneTask,
         path: String,
         worktreeId: String = task.id,
+        sandboxId: String = task.sandboxId,
     ): ByteArray = lock.withLock {
+        check(sandboxId.isBlank() && !task.sandboxOnly || task.acceptsSandbox(sandboxId)) {
+            "此 Sandbox 不在本任务获准访问的范围内"
+        }
+        if (sandboxId.isNotBlank()) {
+            val record = SandboxManager.get(context).requireAccess(sandboxId, task)
+            val relative = WorkspaceManager.validPath(path.removePrefix("/workspace/"))
+            checkFilePermission(task, relative, Capability.WORKSPACE_READ, requireAllow = true)
+            val entry = managedMachine(record)
+            importManagedAttachments(task, record.scope, entry)
+            val vm = entry.vm
+            val (parent, node) = managedPath(vm, relative)
+            check(node?.optInt("mode")?.and(61440) == 32768) { "请选择 Sandbox 中的普通文件" }
+            return@withLock vm.guestRead(
+                "$parent/${relative.substringAfterLast('/')}",
+                32 * 1024 * 1024,
+            )
+        }
         val scope = prepareTask(task)
         val tree = withContext(Dispatchers.IO) { workspaces.begin(scope, worktreeId, task.id) }
         active[scope.key]?.takeIf { worktreeId in it.imported }?.let { exportTree(it, tree) }
@@ -938,14 +1114,6 @@ internal class RuntimeManager(
         }
     }
 
-    suspend fun selectLifetime(scope: WorkspaceScope, lifetime: RuntimeLifetime) = lock.withLock {
-        val record = info(scope)
-        check(scope.key !in active && record.phase in setOf("not_initialized", "deleted")) {
-            "切换生命周期前请重置环境；工作区会保留"
-        }
-        update(record.copy(lifetime = lifetime))
-    }
-
     private suspend fun clearDirectory(scope: WorkspaceScope) =
         withContext(Dispatchers.IO) {
             val dir = directory(scope)
@@ -962,9 +1130,14 @@ internal class RuntimeManager(
 
     private suspend fun release(key: String, entry: Active) {
         val record = _states.value.getValue(key)
-        if (record.lifetime == RuntimeLifetime.PERSISTENT) checkpoint(key, entry)
+        if (record.lifetime == RuntimeLifetime.PERSISTENT) {
+            checkpoint(key, entry)
+        }
         entry.vm.close()
         active.remove(key)
+        if (record.scope.kind == "sandbox") {
+            update(info(record.scope).copy(phase = "suspended", detail = "已保存，可从检查点恢复"))
+        }
         if (record.lifetime == RuntimeLifetime.TEMPORARY) {
             clearDirectory(record.scope)
             update(
@@ -981,17 +1154,15 @@ internal class RuntimeManager(
         }
     }
 
-    suspend fun selectKind(scope: WorkspaceScope, kind: RuntimeKind) = lock.withLock {
-        require(kind.available)
-        check(!File(directory(scope), "machine.state").exists()) { "更换运行环境前需要重置，工作区与记忆会保留" }
-        update(info(scope).copy(kind = kind))
-    }
-
     suspend fun reset(scope: WorkspaceScope) = lock.withLock {
         val record = info(scope)
         check(active[scope.key]?.terminal == null) { "请先关闭本地终端" }
         update(record.copy(phase = "resetting", detail = "保留工作区、历史与记忆，重建环境"))
-        active.remove(scope.key)?.vm?.close()
+        active[scope.key]?.let { entry ->
+            SandboxDisks.get(context).save(entry.vm, entry.disks)
+            entry.vm.close()
+            active.remove(scope.key)
+        }
         withContext(Dispatchers.IO) {
             clearDirectory(scope)
         }
@@ -1015,18 +1186,238 @@ internal class RuntimeManager(
                     }
                 else 0L
             JSONObject()
-                .put("runtimeBytes", size(directory(scope)))
+                .put("runtimeBytes", size(directory(scope, create = false)))
                 .put("sharedToolchainBytes", size(template))
                 .put("distributionBytes", size(RuntimeArtifacts.directory(context)))
-                .put("workspaceBytes", size(workspaces.workspace(scope)))
+                .put(
+                    "workspaceBytes",
+                    if (scope.kind == "sandbox") 0L else size(workspaces.workspace(scope)),
+                )
         }
+
+    suspend fun startManaged(record: SandboxRecord): String = lock.withLock {
+        val scope = record.scope
+        if (info(scope).phase == "not_initialized") update(info(scope).copy(kind = record.base))
+        val entry = machine(scope)
+        try {
+            update(info(scope).copy(phase = "initializing", detail = "检查文件系统、Shell 和基础命令"))
+            val probe =
+                entry.vm.execute(
+                    "set -e; test -w /workspace; printf 'Shell: '; command -v sh; printf 'CPU: '; uname -m; printf 'Alpine: '; cat /etc/alpine-release; printf '工具: '; for tool in apk git ssh curl python3 node; do command -v \"\$tool\" || true; done",
+                    root = "/mnt/alpine",
+                )
+            checkResult(probe, "环境检测")
+            val diagnostics = probe.getString("stdout")
+            update(info(scope).copy(phase = "ready", detail = "环境就绪 · /workspace"))
+            (diagnostics + "\n" + entry.vm.bootLog.takeLast(3500)).trim()
+        } catch (error: Throwable) {
+            withContext(NonCancellable) {
+                entry.vm.close()
+                active.remove(scope.key)
+                update(info(scope).copy(phase = "broken", detail = error.message ?: "环境检测失败"))
+            }
+            throw error
+        }
+    }
+
+    suspend fun changeDiskMounts(change: suspend () -> Unit) {
+        SandboxManager.get(context).cancelDiskLeases()
+        lock.withLock {
+            val affected = active.filterKeys { it.startsWith("sandbox:") }
+            check(affected.values.none { it.terminal != null }) { "请先关闭 Sandbox 终端再调整磁盘" }
+            for ((key, entry) in affected) release(key, entry)
+            change()
+        }
+    }
+
+    suspend fun stopManaged(scope: WorkspaceScope) = lock.withLock {
+        require(scope.kind == "sandbox")
+        active[scope.key]?.let { release(scope.key, it) }
+        update(info(scope).copy(phase = "stopped", detail = "已停止，环境数据已保留"))
+    }
+
+    private suspend fun managedMachine(record: SandboxRecord): Active {
+        val scope = record.scope
+        check(info(scope).phase in setOf("ready", "suspended")) { "Sandbox 未就绪，请在管理页启动或重试" }
+        return machine(scope)
+    }
+
+    private fun checkFilePermission(
+        task: PhoneTask,
+        path: String,
+        capability: Capability,
+        requireAllow: Boolean = false,
+    ) {
+        val permission =
+            permissions.evaluate(
+                PermissionContext(
+                    sessionId = task.sessionId,
+                    projectId = task.projectId,
+                    environment = "sandbox",
+                ),
+                capability,
+                "/workspace/$path",
+            )
+        check(
+            permission.effect != PermissionEffect.DENY &&
+                (!requireAllow || permission.effect == PermissionEffect.ALLOW),
+        ) {
+            permission.reason
+        }
+        if (task.sandboxOnly)
+            checkLegacyFilePolicy(
+                task,
+                "/workspace/$path",
+                if (capability == Capability.WORKSPACE_WRITE) "w" else "r",
+            )
+    }
+
+    private suspend fun managedPath(
+        vm: LinuxVm,
+        path: String,
+        createParents: Boolean = false,
+    ): Pair<String, JSONObject?> {
+        var parent = "/alpine"
+        val parts = ("workspace/$path").trimEnd('/').split('/')
+        for ((index, part) in parts.withIndex()) {
+            val entries = vm.guestList(parent)
+            val found =
+                (0 until entries.length()).asSequence().map(entries::getJSONObject).firstOrNull {
+                    it.optString("name") == part
+                }
+            if (index == parts.lastIndex) return parent to found
+            if (found == null && createParents) {
+                return "$parent/${parts.subList(index, parts.lastIndex).joinToString("/")}" to null
+            }
+            check(found?.optInt("mode")?.and(61440) == 16384) { "目录不存在或包含符号链接" }
+            parent += "/$part"
+        }
+        error("无效工作区路径")
+    }
+
+    private suspend fun managedFile(
+        task: PhoneTask,
+        id: String,
+        method: String,
+        args: JSONObject,
+    ): JSONObject {
+        val record = SandboxManager.get(context).requireAccess(id, task)
+        val path =
+            if (method == "workspace_list") WorkspaceManager.directoryPath(args.optString("path"))
+            else args.getString("name").removePrefix("/workspace/")
+        if (path.isNotBlank() || method != "workspace_list") WorkspaceManager.validPath(path)
+        val capability =
+            if (method == "workspace_write") Capability.WORKSPACE_WRITE
+            else Capability.WORKSPACE_READ
+        checkFilePermission(task, path, capability)
+        val entry = managedMachine(record)
+        importManagedAttachments(task, record.scope, entry)
+        val (parent, node) =
+            managedPath(entry.vm, path, createParents = method == "workspace_write")
+        val file = "$parent/${path.substringAfterLast('/').ifBlank { "workspace" }}"
+        if (method == "workspace_list") {
+            check(node?.optInt("mode")?.and(61440) == 16384) { "请选择 Sandbox 中的目录" }
+            val children = entry.vm.guestList(file)
+            val offset = args.optInt("offset").coerceIn(0, children.length())
+            val rows =
+                (offset until minOf(offset + 250, children.length())).map { index ->
+                    val child = children.getJSONObject(index)
+                    JSONObject()
+                        .put("name", child.getString("name"))
+                        .put("directory", child.getInt("mode") and 61440 == 16384)
+                        .put("size", child.optLong("size"))
+                }
+            return JSONObject()
+                .put("files", JSONArray(rows))
+                .put("total", children.length())
+                .put("offset", offset)
+        }
+        check(node == null || node.getInt("mode") and 61440 == 32768) { "请选择普通文件，不能跟随符号链接" }
+        if (method == "workspace_read") {
+            check(node != null) { "文件不存在" }
+            val bytes = entry.vm.guestRead(file, 100000)
+            return JSONObject().apply {
+                put("name", path)
+                put("text", bytes.decodeToString(throwOnInvalidSequence = true))
+                put("sha256", WorkspaceManager.digest(bytes))
+            }
+        }
+        require(method == "workspace_write")
+        val bytes = args.getString("text").toByteArray()
+        require(bytes.size <= 100000) { "文件最多 100 KB" }
+        val expected = args.optString("expected_sha256")
+        if (node != null) {
+            check(
+                expected.isNotBlank() &&
+                    expected == WorkspaceManager.digest(entry.vm.guestRead(file, 100000)),
+            ) {
+                "覆盖前请先读取当前文件，并提供当前 sha256"
+            }
+        } else check(expected.isBlank()) { "文件已不存在" }
+        entry.vm.guestWrite(
+            file,
+            bytes,
+            node?.optInt("mode")?.and(73) != null && (node.optInt("mode") and 73) != 0,
+        )
+        checkpoint(record.scope.key, entry)
+        return JSONObject()
+            .put("name", path)
+            .put("sha256", WorkspaceManager.digest(bytes))
+            .put("sandboxId", id)
+    }
+
+    private suspend fun importManagedAttachments(
+        task: PhoneTask,
+        scope: WorkspaceScope,
+        entry: Active,
+    ) {
+        if (task.sandboxId != scope.id || task.files.isEmpty() || task.id in entry.imported) return
+        val store = dev.deepseek.mobile.AttachmentStore(context)
+        val entries =
+            withContext(Dispatchers.IO) {
+                task.files
+                    .distinct()
+                    .map { id ->
+                        val attachment = store.get(id)
+                        check(attachment.sessionId == task.sessionId) { "附件不属于当前会话" }
+                        sandboxAttachmentPath(id, attachment.name) to store.file(id)
+                    }
+                    .also { list ->
+                        check(list.sumOf { it.second.length() } <= 32L * 1024 * 1024) {
+                            "本轮 Sandbox 附件合计最多 32 MB"
+                        }
+                    }
+            }
+        var changed = false
+        try {
+            for ((relative, file) in entries) {
+                checkFilePermission(task, relative, Capability.WORKSPACE_WRITE, requireAllow = true)
+                val (parent, existing) = managedPath(entry.vm, relative, createParents = true)
+                if (existing == null) {
+                    val bytes = withContext(Dispatchers.IO) { file.readBytes() }
+                    changed = true
+                    entry.vm.guestWrite("$parent/${relative.substringAfterLast('/')}", bytes)
+                }
+            }
+            if (changed) checkpoint(scope.key, entry)
+            entry.imported.add(task.id)
+        } catch (error: Throwable) {
+            if (changed)
+                withContext(NonCancellable) {
+                    entry.vm.close()
+                    active.remove(scope.key)
+                    update(info(scope).copy(phase = "interrupted", detail = "附件导入中断，保留最近的检查点"))
+                }
+            throw error
+        }
+    }
 
     suspend fun close() = lock.withLock {
         for ((key, entry) in active.toMap()) {
             try {
                 entry.terminal?.let {
                     entry.vm.closePty(it.id)
-                    exportTree(entry, it.tree)
+                    it.tree?.let { tree -> exportTree(entry, tree) }
                 }
                 release(key, entry)
             } catch (error: Throwable) {

@@ -1,6 +1,8 @@
 package dev.deepseek.mobile
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
@@ -27,6 +29,14 @@ import androidx.compose.ui.unit.sp
 internal sealed interface WorkspaceTab {
     data object Home : WorkspaceTab
 
+    data object SandboxAccess : WorkspaceTab
+
+    data class SandboxDisks(val sandboxId: String = "") : WorkspaceTab
+
+    data class RemoteAccess(val target: RemoteTarget) : WorkspaceTab
+
+    data object Workflow : WorkspaceTab
+
     data object Agents : WorkspaceTab
 
     data object Browser : WorkspaceTab
@@ -42,6 +52,8 @@ internal sealed interface WorkspaceTab {
     data class OfficialBrowser(val resultId: String = "") : WorkspaceTab
 
     data class Document(val file: LocalAttachment) : WorkspaceTab
+
+    data class Html(val file: LocalAttachment) : WorkspaceTab
 }
 
 internal object WorkspaceState {
@@ -58,8 +70,19 @@ internal object WorkspaceState {
     val tabs: List<WorkspaceTab>
         get() = opened
 
+    private var tabsPreference by mutableStateOf<Boolean?>(null)
+    val tabsVisible: Boolean
+        get() = tabsPreference ?: opened.isNotEmpty()
+
+    fun toggleTabs() {
+        tabsPreference = !tabsVisible
+    }
+
     val hasTerminal: Boolean
         get() = WorkspaceTab.Terminal in opened
+
+    var navigationRevision by mutableIntStateOf(0)
+        private set
 
     var terminalInstance by mutableIntStateOf(0)
         private set
@@ -84,6 +107,7 @@ internal object WorkspaceState {
         }
         if (target != null) selected = target
         visible = true
+        navigationRevision++
     }
 
     fun openUserBrowser(context: android.content.Context) {
@@ -92,9 +116,10 @@ internal object WorkspaceState {
             .onFailure { AssistantState.error = it.message.orEmpty() }
     }
 
-    fun openUserTerminal() {
+    fun openUserTerminal(sandboxId: String = "") {
         open(WorkspaceTab.Terminal)
-        LocalTerminalState.sessionId = ""
+        LocalTerminalState.sessionId = if (sandboxId.isBlank()) "" else AssistantState.selectedId
+        LocalTerminalState.sandboxId = sandboxId
         terminalInstance++
     }
 
@@ -118,7 +143,8 @@ internal object WorkspaceState {
             val parent =
                 when (tab) {
                     is WorkspaceTab.Agent -> WorkspaceTab.Agents
-                    is WorkspaceTab.Document -> WorkspaceTab.Files
+                    is WorkspaceTab.Document,
+                    is WorkspaceTab.Html -> WorkspaceTab.Files
                     is WorkspaceTab.Web -> WorkspaceTab.Browser
                     else -> WorkspaceTab.Home
                 }
@@ -129,6 +155,7 @@ internal object WorkspaceState {
     fun reset() {
         visible = false
         selected = WorkspaceTab.Home
+        tabsPreference = null
         opened.clear()
         LocalTerminalState.sessionId = ""
     }
@@ -161,6 +188,12 @@ internal fun ConversationWorkspace(progress: State<Float>) {
         state.tabs.mapNotNull { tab ->
             when (tab) {
                 WorkspaceTab.Home -> null
+                WorkspaceTab.Workflow -> WorkspaceLabel(tab, "计划与验证", AppIcons.Checklist)
+                WorkspaceTab.SandboxAccess ->
+                    WorkspaceLabel(tab, "Sandbox 访问", AppIcons.TerminalBox)
+                is WorkspaceTab.SandboxDisks -> WorkspaceLabel(tab, "磁盘挂载", AppIcons.FolderOpen)
+                is WorkspaceTab.RemoteAccess ->
+                    WorkspaceLabel(tab, tab.target.title, tab.target.icon)
                 WorkspaceTab.Agents -> WorkspaceLabel(tab, "子 Agent", AppIcons.Agents)
                 WorkspaceTab.Browser -> WorkspaceLabel(tab, "浏览器", AppIcons.Globe)
                 is WorkspaceTab.OfficialBrowser -> WorkspaceLabel(tab, "官方浏览", AppIcons.Globe)
@@ -176,15 +209,32 @@ internal fun ConversationWorkspace(progress: State<Float>) {
                     else
                         WorkspaceLabel(tab, agents[index].name, agentIcon(index), agentColor(index))
                 }
-                is WorkspaceTab.Document -> WorkspaceLabel(tab, tab.file.name, AppIcons.Description)
+                is WorkspaceTab.Document ->
+                    WorkspaceLabel(
+                        tab,
+                        if (tab.file.isHtml) "源码 · ${tab.file.name}" else tab.file.name,
+                        AppIcons.Description,
+                    )
+                is WorkspaceTab.Html -> WorkspaceLabel(tab, tab.file.name, AppIcons.Globe)
             }
         }
     val tab = state.selected
+    val pageColor =
+        if (tab == WorkspaceTab.Workflow || tab == WorkspaceTab.Home) DshaSurface.page
+        else Color.White
+    val tabsVisible = state.tabsVisible
+    val stripHeight by
+        animateDpAsState(
+            if (tabsVisible) 48.dp else 0.dp,
+            tween(210),
+            label = "workspace-tab-strip",
+        )
     val tabList = rememberLazyListState()
     val index = tabs.indexOfFirst { it.tab == tab }
-    LaunchedEffect(index, placed) {
+    LaunchedEffect(index, placed, tabsVisible) {
         if (
             index >= 0 &&
+                tabsVisible &&
                 placed &&
                 tabList.layoutInfo.visibleItemsInfo.none {
                     it.index == index &&
@@ -194,7 +244,11 @@ internal fun ConversationWorkspace(progress: State<Float>) {
         )
             tabList.scrollToItem(index)
     }
-    Column(
+    val titleInset =
+        with(androidx.compose.ui.platform.LocalDensity.current) {
+            WindowInsets.statusBars.union(WindowInsets.displayCutout).getTop(this).toDp()
+        } + ConversationTitleBarHeight
+    FadingHeaderLayout(
         Modifier.fillMaxSize()
             .testTag("conversation-workspace")
             .layout { measurable, constraints ->
@@ -203,91 +257,117 @@ internal fun ConversationWorkspace(progress: State<Float>) {
                     if (placed) content.placeRelative(0, 0)
                 }
             }
-            .windowInsetsPadding(
-                WindowInsets.statusBars
-                    .union(WindowInsets.displayCutout)
-                    .only(WindowInsetsSides.Top),
-            )
-            .padding(top = ConversationTitleBarHeight)
             .inactiveIf(!open)
             .clipToBounds()
             .graphicsLayer {
                 translationX = size.width * (1f - progress.value.coerceIn(0f, 1f))
             }
-            .background(Color(0xFFF9F9F8))
+            .background(pageColor)
             .windowInsetsPadding(
                 WindowInsets.systemBars
                     .union(WindowInsets.displayCutout)
                     .only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom),
             )
             .imePadding(),
-    ) {
-        if (tabs.isNotEmpty()) {
-            Row(
-                Modifier.fillMaxWidth()
-                    .height(48.dp)
-                    .padding(start = 10.dp, end = 4.dp)
-                    .testTag("workspace-tabs"),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                LazyRow(
-                    state = tabList,
-                    modifier = Modifier.weight(1f),
-                    horizontalArrangement = Arrangement.spacedBy(5.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    items(tabs, key = { it.tab.saveKey() }) { label ->
-                        WorkspaceTabChip(
-                            label,
-                            tab == label.tab,
-                            onClose = {
-                                saved.removeState(label.tab.saveKey())
-                                state.close(label.tab)
-                            },
-                        )
-                    }
-                }
-                SmallIcon(AppIcons.Add, "工作区工具") { state.open(WorkspaceTab.Home) }
-            }
-        }
-        HorizontalDivider(color = WhaleLine)
-        Box(Modifier.fillMaxWidth().weight(1f).clipToBounds()) {
-            if (placed && tab != WorkspaceTab.Terminal) {
-                saved.SaveableStateProvider(tab.saveKey()) {
-                    when (tab) {
-                        WorkspaceTab.Home -> WorkspaceTools()
-                        WorkspaceTab.Agents -> TeamList(agents)
-                        is WorkspaceTab.Agent -> {
-                            val work = agents.firstOrNull { it.id == tab.id }
-                            if (work == null) TeamList(agents) else TeamConversation(work)
-                        }
-                        WorkspaceTab.Browser ->
-                            BrowserWorkspace(browserTabs.lastOrNull { !it.userOwned })
-                        is WorkspaceTab.Web ->
-                            BrowserWorkspace(browserTabs.firstOrNull { it.id == tab.id })
-                        is WorkspaceTab.OfficialBrowser ->
-                            OfficialBrowserWorkspace(AssistantState.current, tab.resultId)
-                        WorkspaceTab.Files -> WorkspaceFiles(id)
-                        is WorkspaceTab.Document -> DocumentWorkspace(tab.file)
-                        WorkspaceTab.Terminal -> Unit
-                    }
-                }
-            }
-            if (state.hasTerminal && state.sessionId == id) {
-                Box(
-                    Modifier.matchParentSize()
-                        .layout { measurable, constraints ->
-                            val content = measurable.measure(constraints)
-                            layout(content.width, content.height) {
-                                if (tab == WorkspaceTab.Terminal && placed)
-                                    content.placeRelative(0, 0)
+        height = titleInset + stripHeight,
+        color = pageColor.copy(alpha = .46f),
+        header = {
+            Column {
+                Spacer(Modifier.height(titleInset))
+                if (stripHeight > 0.dp) {
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .height(stripHeight)
+                            .clipToBounds()
+                            .inactiveIf(!tabsVisible)
+                            .graphicsLayer { alpha = (stripHeight / 48.dp).coerceIn(0f, 1f) }
+                            .wrapContentHeight(Alignment.Bottom, unbounded = true)
+                            .height(48.dp)
+                            .padding(start = 10.dp, end = 4.dp)
+                            .testTag("workspace-tabs"),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        if (tabs.isEmpty()) {
+                            Text(
+                                "暂无打开的标签页",
+                                Modifier.weight(1f).padding(start = 10.dp),
+                                style = PrismTypography.footnote,
+                                color = WhaleMuted,
+                            )
+                        } else
+                            LazyRow(
+                                state = tabList,
+                                modifier = Modifier.weight(1f).testTag("workspace-tab-list"),
+                                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                items(tabs, key = { it.tab.saveKey() }) { label ->
+                                    WorkspaceTabChip(
+                                        label,
+                                        tab == label.tab,
+                                        onClose = {
+                                            saved.removeState(label.tab.saveKey())
+                                            state.close(label.tab)
+                                        },
+                                    )
+                                }
                             }
+                        SmallIcon(AppIcons.Add, "工作区工具") { state.open(WorkspaceTab.Home) }
+                    }
+                }
+            }
+        },
+    ) { topInset ->
+        CompositionLocalProvider(LocalWorkspaceTopInset provides topInset) {
+            Box(Modifier.fillMaxSize().clipToBounds()) {
+                if (placed && tab != WorkspaceTab.Terminal) {
+                    saved.SaveableStateProvider(tab.saveKey()) {
+                        when (tab) {
+                            WorkspaceTab.Home -> WorkspaceTools()
+                            WorkspaceTab.SandboxAccess -> SandboxAccessPane(AssistantState.current)
+                            is WorkspaceTab.SandboxDisks -> SandboxDiskAccessPane(tab.sandboxId)
+                            is WorkspaceTab.RemoteAccess -> RemoteAccessPane(tab.target)
+                            WorkspaceTab.Workflow -> WorkflowWorkspace(AssistantState.current)
+                            WorkspaceTab.Agents -> TeamList(agents)
+                            is WorkspaceTab.Agent -> {
+                                val work = agents.firstOrNull { it.id == tab.id }
+                                if (work == null) TeamList(agents) else TeamConversation(work)
+                            }
+                            WorkspaceTab.Browser ->
+                                Box(Modifier.padding(top = topInset)) {
+                                    BrowserWorkspace(browserTabs.lastOrNull { !it.userOwned })
+                                }
+                            is WorkspaceTab.Web ->
+                                Box(Modifier.padding(top = topInset)) {
+                                    BrowserWorkspace(browserTabs.firstOrNull { it.id == tab.id })
+                                }
+                            is WorkspaceTab.OfficialBrowser ->
+                                OfficialBrowserWorkspace(AssistantState.current, tab.resultId)
+                            WorkspaceTab.Files -> WorkspaceFiles(id)
+                            is WorkspaceTab.Document -> DocumentWorkspace(tab.file)
+                            is WorkspaceTab.Html -> HtmlWorkspace(tab.file)
+                            WorkspaceTab.Terminal -> Unit
                         }
-                        .inactiveIf(!open || tab != WorkspaceTab.Terminal),
-                ) {
-                    val conversation = AssistantState.sessions.firstOrNull { it.id == id }
-                    if (conversation != null)
-                        key(id, state.terminalInstance) { WorkspaceTerminal(conversation) }
+                    }
+                }
+                if (state.hasTerminal && state.sessionId == id) {
+                    Box(
+                        Modifier.matchParentSize()
+                            .layout { measurable, constraints ->
+                                val content = measurable.measure(constraints)
+                                layout(content.width, content.height) {
+                                    if (tab == WorkspaceTab.Terminal && placed)
+                                        content.placeRelative(0, 0)
+                                }
+                            }
+                            .inactiveIf(!open || tab != WorkspaceTab.Terminal),
+                    ) {
+                        val conversation = AssistantState.sessions.firstOrNull { it.id == id }
+                        if (conversation != null)
+                            Box(Modifier.padding(top = topInset)) {
+                                key(id, state.terminalInstance) { WorkspaceTerminal(conversation) }
+                            }
+                    }
                 }
             }
         }
@@ -300,6 +380,9 @@ private fun WorkspaceTab.saveKey(): String =
         is WorkspaceTab.Web -> "browser-$id"
         is WorkspaceTab.OfficialBrowser -> "official-browser"
         is WorkspaceTab.Document -> "document-${file.id}"
+        is WorkspaceTab.Html -> "html-${file.id}"
+        is WorkspaceTab.SandboxDisks -> "sandbox-disks-$sandboxId"
+        is WorkspaceTab.RemoteAccess -> "remote-${target.entry}"
         else -> javaClass.simpleName
     }
 
@@ -307,13 +390,13 @@ private fun WorkspaceTab.saveKey(): String =
 private fun WorkspaceTabChip(label: WorkspaceLabel, selected: Boolean, onClose: () -> Unit) {
     Row(
         Modifier.height(40.dp)
-            .clip(ContinuousShape(9.dp))
-            .background(if (selected) Color.White else Color(0xFFF1F1F0))
-            .border(1.dp, if (selected) WhaleLine else Color.Transparent, ContinuousShape(9.dp)),
+            .clip(ContinuousShape(22.dp))
+            .background(if (selected) WhaleTint else DshaSurface.inset),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Row(
             Modifier.fillMaxHeight()
+                .testTag("workspace-tab-${label.tab.saveKey()}")
                 .selectable(selected, role = Role.Tab) {
                     WorkspaceState.open(label.tab)
                 }
@@ -341,52 +424,64 @@ private fun WorkspaceTools() {
     val context = androidx.compose.ui.platform.LocalContext.current
     val tools =
         listOf(
+            WorkspaceLabel(WorkspaceTab.Workflow, "计划与验证", AppIcons.Checklist) to "跟踪步骤与实际检查",
             WorkspaceLabel(WorkspaceTab.Agents, "子 Agent 会话", AppIcons.Agents) to "查看当前会话的子任务",
             WorkspaceLabel(WorkspaceTab.Browser, "内置浏览器", AppIcons.Globe) to "打开新标签页",
             WorkspaceLabel(WorkspaceTab.Terminal, "会话终端", AppIcons.Terminal) to "新建用户终端",
             WorkspaceLabel(WorkspaceTab.Files, "会话文件", AppIcons.FolderOpen) to "打开文档和附件",
         )
     Column(
-        Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(18.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        Modifier.fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+            .padding(
+                start = 16.dp,
+                end = 16.dp,
+                top = LocalWorkspaceTopInset.current + 12.dp,
+                bottom = 12.dp,
+            ),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("工具", Modifier.padding(bottom = 4.dp), fontSize = 16.sp)
-        tools.chunked(2).forEach { row ->
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                row.forEach { (tool, detail) ->
-                    Surface(
-                        onClick = {
-                            when (tool.tab) {
-                                WorkspaceTab.Browser -> WorkspaceState.openUserBrowser(context)
-                                WorkspaceTab.Terminal -> WorkspaceState.openUserTerminal()
-                                else -> WorkspaceState.open(tool.tab)
-                            }
-                        },
-                        modifier = Modifier.weight(1f).heightIn(min = 88.dp),
-                        shape = ContinuousShape(14.dp),
-                        color = Color(0xFFF0F0EF),
-                    ) {
-                        Column(
-                            Modifier.padding(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp),
-                        ) {
-                            Icon(tool.icon, null, Modifier.size(18.dp), tint = WhaleMuted)
-                            Text(tool.title, fontSize = 14.sp, lineHeight = 19.sp)
-                            Text(detail, fontSize = 11.sp, lineHeight = 15.sp, color = WhaleMuted)
-                        }
-                    }
-                }
+        Text(
+            "工作",
+            Modifier.padding(start = 16.dp, top = 8.dp),
+            style = PrismTypography.footnote,
+            color = WhaleMuted,
+        )
+        SettingsGroup {
+            SettingsLink(AppIcons.TerminalBox, "Sandbox 访问", "按会话授权环境与磁盘挂载") {
+                WorkspaceState.open(WorkspaceTab.SandboxAccess)
             }
+            SettingsLink(RemoteTarget.SSH.icon, "Remote SSH", "管理此会话可访问的服务器") {
+                WorkspaceState.open(WorkspaceTab.RemoteAccess(RemoteTarget.SSH))
+            }
+            SettingsLink(RemoteTarget.COMPUTER.icon, "Remote Computer", "管理此会话可访问的远程电脑") {
+                WorkspaceState.open(WorkspaceTab.RemoteAccess(RemoteTarget.COMPUTER))
+            }
+            tools
+                .filter {
+                    it.first.tab in
+                        listOf(WorkspaceTab.Workflow, WorkspaceTab.Agents, WorkspaceTab.Files)
+                }
+                .forEach { (tool, detail) ->
+                    SettingsLink(tool.icon, tool.title, detail) { WorkspaceState.open(tool.tab) }
+                }
         }
-        BrowserState.tabs
-            .filter { it.sessionId == AssistantState.selectedId && !it.userOwned }
-            .forEach { page ->
-                SettingsLink(AppIcons.Globe, page.title.ifBlank { "Agent 网页" }, page.url) {
-                    WorkspaceState.open(WorkspaceTab.Web(page.id))
-                }
+        Text(
+            "终端与浏览",
+            Modifier.padding(start = 16.dp, top = 8.dp),
+            style = PrismTypography.footnote,
+            color = WhaleMuted,
+        )
+        SettingsGroup {
+            SettingsLink(AppIcons.Globe, "内置浏览器", "打开新标签页") {
+                WorkspaceState.openUserBrowser(context)
             }
+            SettingsLink(AppIcons.Terminal, "会话终端", "新建用户终端") { WorkspaceState.openUserTerminal() }
+        }
+        val pages =
+            BrowserState.tabs.filter { it.sessionId == AssistantState.selectedId && !it.userOwned }
         val session = AssistantState.current
-        if (
+        val official =
             ExperienceSettings.browserMode.official ||
                 (sequenceOf(session.messages) +
                         TeamState.agents
@@ -401,9 +496,23 @@ private fun WorkspaceTools() {
                                 }
                         }
                     }
-        ) {
-            SettingsLink(AppIcons.Globe, "官方浏览记录", "查看 Agent 搜索与抓取结果") {
-                WorkspaceState.open(WorkspaceTab.OfficialBrowser())
+        if (pages.isNotEmpty() || official) {
+            Text(
+                "浏览记录",
+                Modifier.padding(start = 16.dp, top = 8.dp),
+                style = PrismTypography.footnote,
+                color = WhaleMuted,
+            )
+            SettingsGroup {
+                pages.forEach { page ->
+                    SettingsLink(AppIcons.Globe, page.title.ifBlank { "Agent 网页" }, page.url) {
+                        WorkspaceState.open(WorkspaceTab.Web(page.id))
+                    }
+                }
+                if (official)
+                    SettingsLink(AppIcons.Globe, "官方浏览记录", "查看 Agent 搜索与抓取结果") {
+                        WorkspaceState.open(WorkspaceTab.OfficialBrowser())
+                    }
             }
         }
     }

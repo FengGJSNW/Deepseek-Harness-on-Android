@@ -2,6 +2,7 @@ package dev.deepseek.mobile
 
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -55,16 +56,7 @@ internal fun ChatMessage(entry: ChatEntry, showHeader: Boolean = true) {
         Modifier.fillMaxWidth(),
         horizontalAlignment = if (entry.type == "user") Alignment.End else Alignment.Start,
     ) {
-        if (entry.type == "assistant" && showHeader)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                AgentAvatar(30.dp)
-                Text(
-                    AgentIdentity.name,
-                    fontSize = 12.sp,
-                    color = WhaleMuted,
-                    modifier = Modifier.padding(start = 9.dp),
-                )
-            }
+        if (entry.type == "assistant" && showHeader) AgentMessageHeader(AgentIdentity.name)
         if (entry.images.isNotEmpty())
             Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                 entry.images.forEach { AttachmentImage(it, 66) }
@@ -77,13 +69,15 @@ internal fun ChatMessage(entry: ChatEntry, showHeader: Boolean = true) {
                     shape = ContinuousShape(18.dp),
                     modifier = Modifier.widthIn(max = 310.dp),
                 ) {
-                    Text(
-                        entry.text,
-                        Modifier.padding(horizontal = 15.dp, vertical = 11.dp),
-                        fontSize = 15.sp,
-                        lineHeight = 22.sp,
-                        fontFamily = DshaFonts.family(FontRole.UI),
-                    )
+                    SelectionContainer {
+                        Text(
+                            entry.text,
+                            Modifier.padding(horizontal = 15.dp, vertical = 11.dp),
+                            fontSize = 15.sp,
+                            lineHeight = 22.sp,
+                            fontFamily = DshaFonts.family(FontRole.BODY),
+                        )
+                    }
                 }
             } else {
                 MarkdownText(entry.text, Modifier.widthIn(max = 700.dp).padding(vertical = 3.dp))
@@ -99,6 +93,14 @@ internal fun ChatMessage(entry: ChatEntry, showHeader: Boolean = true) {
             ) {
                 Icon(AppIcons.ContentCopy, "复制回复", Modifier.size(16.dp), tint = WhaleMuted)
             }
+    }
+}
+
+@Composable
+internal fun AgentMessageHeader(name: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        AgentAvatar(28.dp)
+        Text(name, Modifier.padding(start = 8.dp), fontSize = 12.sp, color = WhaleMuted)
     }
 }
 

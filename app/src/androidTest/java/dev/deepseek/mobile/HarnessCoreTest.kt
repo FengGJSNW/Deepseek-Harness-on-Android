@@ -88,7 +88,7 @@ class HarnessCoreTest {
     }
 
     @Test
-    fun interruptedApprovalsAndMemoryProposalsNeverExecuteAfterRestart() = fixture { context ->
+    fun interruptedApprovalsStayInterruptedAndMemoryReloadsAfterCompaction() = fixture { context ->
         val task =
             PhoneTask(
                 sessionId = UUID.randomUUID().toString(),
@@ -107,13 +107,17 @@ class HarnessCoreTest {
         val memory = MemoryStore(context)
         val manager = ContextManager(context, memory, PermissionManager(context))
         val original = memory.read("global", "")
-        val id = manager.recordProposal(task, original, "long term fact")
-        val restored = ContextManager(context, memory, PermissionManager(context))
-        assertEquals("interrupted", restored.proposals().getJSONObject(0).getString("status"))
-        assertEquals(original.sha256, memory.read("global", "").sha256)
-        restored.applyProposalFromUser(id)
-        assertEquals("long term fact", memory.read("global", "").text)
-        assertTrue(runCatching { restored.applyProposalFromUser(id) }.isFailure)
+        val first = manager.startup(task).getJSONObject("global").getString("sha256")
+        val saved = memory.write("global", "", "long term fact", original.sha256)
+        assertEquals(first, manager.startup(task).getJSONObject("global").getString("sha256"))
+        assertEquals(
+            saved.sha256,
+            manager
+                .startup(task, checkpoint = "compacted")
+                .getJSONObject("global")
+                .getString("sha256"),
+        )
+        assertFalse(manager.startup(task).has("session"))
     }
 
     private fun fixture(block: (Context) -> Unit) {

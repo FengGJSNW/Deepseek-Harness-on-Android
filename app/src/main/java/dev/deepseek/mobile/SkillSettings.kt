@@ -62,7 +62,7 @@ internal fun SkillSettings(projectId: String) {
     )
     if (projectId.isNotBlank())
         ToggleSetting("仅当前项目", "关闭时管理所有会话共享的技能", currentProject) { currentProject = it }
-    Button(onClick = { pick.launch(arrayOf("*/*")) }, enabled = !busy) { Text("导入技能包") }
+    DshaButton(onClick = { pick.launch(arrayOf("*/*")) }, enabled = !busy) { Text("导入技能包") }
     val visible = items.filter { it.projectId == owner }
     SectionLabel(if (currentProject) "当前项目的技能" else "共享技能")
     if (visible.isEmpty()) SettingsStatusCard(AppIcons.FolderOpen, "还没有安装技能")
@@ -82,7 +82,7 @@ internal fun SkillSettings(projectId: String) {
             else change { store.enable(item.id, false) }
         }
         Row {
-            TextButton(
+            DshaTextButton(
                 enabled = !busy,
                 onClick = {
                     scope.launch {
@@ -98,7 +98,7 @@ internal fun SkillSettings(projectId: String) {
             ) {
                 Text("查看指令")
             }
-            TextButton(enabled = !busy, onClick = { change { store.remove(item.id) } }) {
+            DshaTextButton(enabled = !busy, onClick = { change { store.remove(item.id) } }) {
                 Text("卸载")
             }
         }
@@ -128,7 +128,7 @@ internal fun SkillSettings(projectId: String) {
                 Text(body, fontSize = 13.sp, lineHeight = 20.sp)
             }
             if (!item.enabled)
-                Button(
+                DshaButton(
                     onClick = {
                         preview = null
                         change { store.enable(item.id, true) }

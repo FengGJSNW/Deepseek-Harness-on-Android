@@ -6,15 +6,17 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import androidx.compose.runtime.*
-import com.topjohnwu.superuser.Shell
-import com.topjohnwu.superuser.ipc.RootService
 import dev.deepseek.mobile.BuildConfig
 import kotlinx.coroutines.*
 import org.json.JSONObject
 import rikka.shizuku.Shizuku
 
 /** A selected tier is configuration. Only a verified remote UID makes its transport ready. */
-class TerminalConnections(private val context: Context) {
+class TerminalConnections
+internal constructor(
+    private val context: Context,
+    private val rootBinding: RootBinding = LibsuRootBinding(context),
+) {
     val app = ProcessWorker()
     var shellState by mutableStateOf(TerminalConnectionState(detail = "连接 Shizuku 后验证 UID 2000"))
         private set
@@ -33,6 +35,7 @@ class TerminalConnections(private val context: Context) {
     private var shellEpoch = 0L
     private var rootEpoch = 0L
     private var shellRequested = false
+    private var rootRequested = false
     private var closed = false
     private var rootJob: Job? = null
     private val args =
@@ -92,7 +95,20 @@ class TerminalConnections(private val context: Context) {
     }
 
     fun refresh() {
-        if (!closed) refreshShell()
+        if (closed) return
+        refreshShell()
+        if (rootState.ready && root?.asBinder()?.isBinderAlive != true)
+            disconnected(true, rootEpoch)
+        if (rootRequested && rootState.phase !in setOf("denied", "wrong_identity")) connectRoot()
+    }
+
+    fun restoreSelected(level: TerminalLevel, enabled: Boolean) {
+        if (
+            enabled &&
+                level in setOf(TerminalLevel.ROOT, TerminalLevel.ROOT_GUARDED) &&
+                rootState.phase == "idle"
+        )
+            connectRoot()
     }
 
     private fun refreshShell() {
@@ -244,8 +260,15 @@ class TerminalConnections(private val context: Context) {
     }
 
     fun connectRoot() {
-        if (closed || rootState.ready || rootState.pending) return
+        if (closed || rootState.pending) return
+        if (rootState.ready && root?.asBinder()?.isBinderAlive == true) return
+        rootRequested = true
+        rootJob?.cancel()
+        val stale = rootConnection
         val epoch = ++rootEpoch
+        rootConnection = null
+        root = null
+        if (stale != null) runCatching { rootBinding.unbind(stale) }
         rootState =
             TerminalConnectionState(
                 "requesting",
@@ -254,41 +277,27 @@ class TerminalConnections(private val context: Context) {
             )
         rootJob = scope.launch {
             try {
-                withContext(Dispatchers.IO) {
-                    // A fresh shell avoids a cached, non-root main shell silently skipping bind.
-                    Shell.Builder.create().setTimeout(30).build().use { privileged ->
-                        if (!privileged.isRoot) {
-                            withContext(Dispatchers.Main) {
-                                if (current(true, epoch)) {
-                                    preferences.edit().putBoolean("root_verified", false).apply()
-                                    rootState =
-                                        TerminalConnectionState(
-                                            "denied",
-                                            "su 没有授予 UID 0。请在 Root 管理器中检查 DSHA 授权、Root 配置或 su 可见性；此结果不能单独证明设备未 Root。",
-                                            errorCode = "ROOT_NOT_GRANTED",
-                                        )
-                                }
-                            }
-                            return@withContext
-                        }
-                        val task =
-                            withContext(Dispatchers.Main) {
-                                if (!current(true, epoch)) return@withContext null
-                                rootState =
-                                    TerminalConnectionState(
-                                        "binding",
-                                        "su 已可用，正在绑定 Root 终端服务…",
-                                        errorCode = "ROOT_BINDING",
-                                    )
-                                rootConnection = connection(true, epoch)
-                                RootService.bindOrTask(
-                                    Intent(context, RootTerminalService::class.java),
-                                    context.mainExecutor,
-                                    rootConnection!!,
-                                )
-                            }
-                        if (task != null) privileged.execTask(task)
+                rootBinding.bind {
+                    if (!current(true, epoch)) null
+                    else {
+                        rootState =
+                            TerminalConnectionState(
+                                "binding",
+                                "su 已可用，正在绑定 Root 终端服务…",
+                                errorCode = "ROOT_BINDING",
+                            )
+                        connection(true, epoch).also { rootConnection = it }
                     }
+                }
+            } catch (error: RootNotGranted) {
+                if (current(true, epoch)) {
+                    preferences.edit().putBoolean("root_verified", false).apply()
+                    rootState =
+                        TerminalConnectionState(
+                            "denied",
+                            "su 没有授予 UID 0。请在 Root 管理器中检查 DSHA 授权。",
+                            errorCode = "ROOT_NOT_GRANTED",
+                        )
                 }
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
@@ -395,7 +404,7 @@ class TerminalConnections(private val context: Context) {
 
     private fun timeout(isRoot: Boolean, epoch: Long) {
         scope.launch {
-            delay(60000)
+            delay(if (isRoot) 90000 else 60000)
             if (current(isRoot, epoch) && (if (isRoot) rootState else shellState).pending) {
                 disconnect(isRoot, forget = false)
                 val state =
@@ -411,11 +420,12 @@ class TerminalConnections(private val context: Context) {
 
     fun disconnect(isRoot: Boolean, forget: Boolean = true) {
         if (isRoot) {
+            if (forget) rootRequested = false
             rootEpoch++
             rootJob?.cancel()
             rootJob = null
             root = null
-            rootConnection?.let { runCatching { RootService.unbind(it) } }
+            rootConnection?.let { runCatching { rootBinding.unbind(it) } }
             rootConnection = null
             rootState = TerminalConnectionState(detail = "Root 已断开")
         } else {
