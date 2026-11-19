@@ -14,3 +14,10 @@ test('emoji sequences stay whole and upright without changing original text', ()
   }
   assert.ok(uprightSegments('Italic 中文 123 # * + =').every((p) => !p.upright));
 });
+
+test('Markdown preserves whole emoji when Intl.Segmenter is absent', async (t) => {
+  t.mock.property(Intl, 'Segmenter', undefined);
+  const legacy = await import('../web/upright-symbols.js?without-native-segmentation');
+  const text = 'é 你好 👩🏽‍💻 → 🇨🇳 1️⃣ 👨‍👩‍👧‍👦';
+  assert.deepEqual(legacy.uprightSegments(text), uprightSegments(text));
+});

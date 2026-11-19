@@ -57,7 +57,11 @@ class AgentService : Service() {
             )
     }
 
-    lateinit var webView: WebView
+    private var engineView: WebView? = null
+    val webView: WebView
+        get() = checkNotNull(engineView) { "消息引擎未连接" }
+
+    @Volatile private var engineEpoch = 0L
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val requests = ConcurrentHashMap<String, Job>()
     private val connections = ConcurrentHashMap<String, HttpURLConnection>()
@@ -128,10 +132,15 @@ class AgentService : Service() {
         loadEngine()
     }
 
-    private fun loadEngine() {
+    internal fun loadEngine(factory: () -> WebView = { WebView(this) }) {
         AssistantState.ready = false
-        webView =
-            WebView(this).apply {
+        val epoch = ++engineEpoch
+        if (AssistantState.error == AssistantState.engineFailure) AssistantState.error = ""
+        AssistantState.engineFailure = ""
+        try {
+            val page = factory()
+            engineView = page
+            page.apply {
                 settings.javaScriptEnabled = true
                 settings.domStorageEnabled = true
                 settings.allowFileAccess = false
@@ -142,14 +151,28 @@ class AgentService : Service() {
                 isSaveEnabled = false
                 importantForAutofill =
                     android.view.View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
-                addJavascriptInterface(Bridge(), "Android")
+                addJavascriptInterface(Bridge(epoch), "Android")
                 webViewClient =
                     object : WebViewClient() {
+                        override fun onPageFinished(view: WebView, url: String?) {
+                            if (view !== engineView || url != "$ORIGIN/assets/index.html") return
+                            // A parse failure in app.js also disables its own error reporter.
+                            view.evaluateJavascript(
+                                "typeof window.runTask === 'function' && typeof window.nativeResolve === 'function'",
+                            ) { loaded ->
+                                if (view === engineView && epoch == engineEpoch && loaded != "true")
+                                    engineUnavailable("消息引擎脚本未能加载。请更新系统 WebView 后重启消息引擎。")
+                            }
+                        }
+
                         override fun onRenderProcessGone(
                             view: WebView,
                             detail: android.webkit.RenderProcessGoneDetail,
                         ): Boolean {
-                            restartEngine()
+                            if (view === engineView) {
+                                // A deterministic renderer crash can recur on every page load.
+                                resetEngine(reload = !detail.didCrash())
+                            }
                             return true
                         }
 
@@ -225,12 +248,40 @@ class AgentService : Service() {
                     }
                 loadUrl("$ORIGIN/assets/index.html")
             }
+        } catch (_: RuntimeException) {
+            missingWebView()
+        } catch (_: LinkageError) {
+            // A partially updated vendor provider can fail while loading its native library.
+            missingWebView()
+        }
+    }
+
+    private fun missingWebView() {
+        discardEngine()
+        engineUnavailable("系统 WebView 无法启动。请启用或更新系统 WebView，再到设置中重启消息引擎。")
+    }
+
+    private fun engineUnavailable(reason: String) {
+        AssistantState.ready = false
+        AssistantState.engineFailure = reason
+        AssistantState.error = reason
+    }
+
+    private fun discardEngine() {
+        engineEpoch++
+        val old = engineView ?: return
+        engineView = null
+        (old.parent as? android.view.ViewGroup)?.removeView(old)
+        old.destroy()
     }
 
     /**
      * Rebuild a lost renderer, preserving history but never replaying interrupted phone actions.
      */
-    fun restartEngine() {
+    fun restartEngine() = resetEngine(reload = true)
+
+    private fun resetEngine(reload: Boolean) {
+        discardEngine()
         active = false
         generation++
         AssistantState.ready = false
@@ -244,23 +295,21 @@ class AgentService : Service() {
             .filter { it.status in listOf("queued", "running", "waiting", "stopping") }
             .forEach {
                 it.status = "interrupted"
-                it.progress = "引擎已重启，请重新发送"
+                it.progress = "消息引擎已中断，请重新发送"
             }
         AssistantState.running?.let { task ->
             AssistantState.sessions
                 .find { it.id == task.sessionId }
                 ?.messages
                 ?.add(
-                    ChatEntry("system", "消息引擎已重启，刚才的操作已中断，请重新发送。"),
+                    ChatEntry("system", "消息引擎已中断，刚才的操作不会自动重试。"),
                 )
         }
         AssistantState.activeTaskId = ""
         AssistantState.queuePaused = false
         AssistantState.persist()
         releaseWake()
-        webView.removeJavascriptInterface("Android")
-        webView.destroy()
-        loadEngine()
+        if (reload) loadEngine() else engineUnavailable("消息引擎已崩溃。会话已保留，请在设置中重启消息引擎。")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -351,9 +400,11 @@ class AgentService : Service() {
         // Cancel pending gestures and all task-owned RPCs before accepting another turn.
         requests.filterKeys { it.startsWith("task-") }.values.forEach { it.cancel() }
         releaseWake()
+        val epoch = engineEpoch
         main.post {
             updateNotification("任务已停止")
-            webView.evaluateJavascript("window.stopFromNative?.()", null)
+            if (epoch == engineEpoch)
+                engineView?.evaluateJavascript("window.stopFromNative?.()", null)
         }
     }
 
@@ -410,22 +461,27 @@ class AgentService : Service() {
 
     private fun emit(type: String, value: Any) {
         val encoded = if (value is String) JSONObject.quote(value) else value.toString()
+        val epoch = engineEpoch
         main.post {
-            webView.evaluateJavascript(
-                "window.nativeEvent?.(${JSONObject.quote(type)},$encoded)",
-                null,
-            )
+            if (epoch == engineEpoch)
+                engineView?.evaluateJavascript(
+                    "window.nativeEvent?.(${JSONObject.quote(type)},$encoded)",
+                    null,
+                )
         }
     }
 
-    private fun resolve(id: String, value: Any?, error: String? = null) {
+    private fun resolve(epoch: Long, id: String, value: Any?, error: String? = null) {
         val envelope =
             JSONObject()
                 .put("id", id)
                 .put("ok", error == null)
                 .put("value", value ?: JSONObject.NULL)
                 .put("error", error ?: JSONObject.NULL)
-        main.post { webView.evaluateJavascript("window.nativeResolve?.($envelope)", null) }
+        main.post {
+            if (epoch == engineEpoch)
+                engineView?.evaluateJavascript("window.nativeResolve?.($envelope)", null)
+        }
     }
 
     private fun assertActive(epoch: Long) {
@@ -506,24 +562,28 @@ class AgentService : Service() {
         ) + workflowPolicy.tools
     }
 
-    inner class Bridge {
+    inner class Bridge(private val engine: Long) {
         @JavascriptInterface
         fun ui(type: String, json: String) {
-            main.post { onUiEvent(type, json) }
+            main.post { if (engine == engineEpoch) onUiEvent(type, json) }
         }
 
         @JavascriptInterface
         fun request(id: String, method: String, json: String) {
+            if (engine != engineEpoch) return
             if (id.length > 100 || json.length > 12_000_000) {
-                resolve(id, null, "请求过大")
+                resolve(engine, id, null, "请求过大")
                 return
             }
             val epoch = generation
             val taskRequest = method in taskMethods || method == "image_recognition"
-            val mapId = if (taskRequest) "task-$id" else id
+            // Each new page starts numbering JS requests at r1.
+            val nativeId = "$engine:$id"
+            val mapId = if (taskRequest) "task-$nativeId" else nativeId
             val job =
                 scope.launch(start = kotlinx.coroutines.CoroutineStart.LAZY) {
                     try {
+                        if (engine != engineEpoch) return@launch
                         val args = JSONObject(json)
                         if (taskRequest) assertActive(epoch)
                         val value =
@@ -539,14 +599,14 @@ class AgentService : Service() {
                                         "launch_app",
                                     )
                             )
-                                phoneLock.withLock { dispatch(method, args, id, epoch) }
-                            else dispatch(method, args, id, epoch)
+                                phoneLock.withLock { dispatch(method, args, nativeId, epoch) }
+                            else dispatch(method, args, nativeId, epoch)
                         if (taskRequest) assertActive(epoch)
-                        resolve(id, value)
+                        resolve(engine, id, value)
                     } catch (error: CancellationException) {
-                        resolve(id, null, "操作已取消，任务已停止")
+                        resolve(engine, id, null, "操作已取消，任务已停止")
                     } catch (error: Exception) {
-                        resolve(id, null, safeMessage(error))
+                        resolve(engine, id, null, safeMessage(error))
                     } finally {
                         requests.remove(mapId)
                     }
@@ -557,13 +617,14 @@ class AgentService : Service() {
 
         @JavascriptInterface
         fun cancel(id: String) {
-            connections.remove(id)?.disconnect()
-            requests["task-$id"]?.cancel()
+            val nativeId = "$engine:$id"
+            connections.remove(nativeId)?.disconnect()
+            requests["task-$nativeId"]?.cancel()
         }
 
         @JavascriptInterface
         fun emergencyStop() {
-            main.post { stopTask() }
+            main.post { if (engine == engineEpoch) stopTask() }
         }
     }
 
@@ -635,7 +696,7 @@ class AgentService : Service() {
     fun send(text: String): SendResult {
         val c = AssistantState.current
         if (!AssistantState.ready) {
-            toast("引擎正在准备，请稍后重试")
+            toast(AssistantState.engineFailure.ifEmpty { "引擎正在准备，请稍后重试" })
             return SendResult.NOT_READY
         }
         // The key store is authoritative; a delayed UI status event must not reroute Send.
@@ -810,6 +871,12 @@ class AgentService : Service() {
 
     fun onUiEvent(type: String, json: String) {
         when (type) {
+            "engine_unavailable" -> {
+                val reason = org.json.JSONTokener(json).nextValue() as? String
+                engineUnavailable(
+                    reason?.take(240)?.takeIf { it.isNotBlank() } ?: "消息引擎未能启动，请在设置中重试。",
+                )
+            }
             "task_event" -> {
                 val e = JSONObject(json)
                 val t = AssistantState.running ?: return
@@ -927,6 +994,7 @@ class AgentService : Service() {
             }
 
             else -> {
+                if (type == "ready" && AssistantState.engineFailure.isNotEmpty()) return
                 AssistantState.receive(type, json)
                 if (type == "ready") {
                     refreshFloating()
@@ -987,7 +1055,7 @@ class AgentService : Service() {
 
     fun stopChild(id: String) {
         if (!id.matches(Regex("[a-f0-9-]{36}"))) return
-        webView.evaluateJavascript("window.stopChild?.(${JSONObject.quote(id)})", null)
+        engineView?.evaluateJavascript("window.stopChild?.(${JSONObject.quote(id)})", null)
     }
 
     private fun toolName(name: String) =
@@ -3086,14 +3154,12 @@ class AgentService : Service() {
                     "deepseek-harness/0.2.1-rc.3 (+https://github.com/deepseek-ai/deepseek-harness) DSHA/${BuildConfig.VERSION_NAME}",
                 )
                 if (epoch != null) assertActive(epoch)
-                connection.outputStream.use {
-                    it.write(
-                        JSONObject(body.toString())
-                            .apply { remove("_agentId") }
-                            .toString()
-                            .toByteArray(Charsets.UTF_8),
-                    )
-                }
+                val request = JSONObject(body.toString())
+                    .apply { remove("_agentId") }
+                    .toString()
+                    .toByteArray(Charsets.UTF_8)
+                connection.setFixedLengthStreamingMode(request.size)
+                connection.outputStream.use { it.write(request) }
                 val code = connection.responseCode
                 if (code !in 200..299) {
                     val message =
@@ -3106,13 +3172,22 @@ class AgentService : Service() {
                         }
                     error(message)
                 }
-                if (body.optBoolean("stream")) {
-                    val stream = CompletionStream()
-                    var lastPublished = 0L
-                    suspend fun publish(done: Boolean) {
-                        if (epoch != null) assertActive(epoch)
-                        val task = AssistantState.running ?: return
-                        withContext(Dispatchers.Main) {
+                val showProgress = body.optBoolean("stream")
+                var lastPublished = 0L
+                val taskContext = coroutineContext
+                val checkRequest = {
+                    taskContext.ensureActive()
+                    if (epoch != null) assertActive(epoch)
+                }
+                connection.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
+                    readCompletion(reader, checkRequest) { stream, done ->
+                        if (!showProgress) return@readCompletion
+                        val now = android.os.SystemClock.elapsedRealtime()
+                        if (!done && now - lastPublished <= 60) return@readCompletion
+                        lastPublished = now
+                        withContext(Dispatchers.Main) update@{
+                            checkRequest()
+                            val task = AssistantState.running ?: return@update
                             val owner = body.optString("_agentId")
                             val messages =
                                 if (owner.isBlank())
@@ -3143,30 +3218,9 @@ class AgentService : Service() {
                             }
                         }
                     }
-                    connection.inputStream.bufferedReader().use { reader ->
-                        while (true) {
-                            val line = reader.readLine() ?: break
-                            if (epoch != null) assertActive(epoch)
-                            if (!line.startsWith("data:")) continue
-                            val payload = line.substringAfter(':').trim()
-                            if (payload == "[DONE]") break
-                            stream.accept(JSONObject(payload))
-                            val now = android.os.SystemClock.elapsedRealtime()
-                            if (now - lastPublished > 60) {
-                                publish(false)
-                                lastPublished = now
-                            }
-                        }
-                    }
-                    publish(true)
-                    stream.result()
-                } else {
-                    val text = connection.inputStream.bufferedReader().use { it.readText() }
-                    if (epoch != null) assertActive(epoch)
-                    JSONObject(text)
                 }
             } finally {
-                connections.remove(id)
+                connections.remove(id, connection)
                 connection.disconnect()
             }
         }
@@ -3340,6 +3394,7 @@ class AgentService : Service() {
     }
 
     override fun onDestroy() {
+        discardEngine()
         sandboxProtection?.close()
         sandboxProtection = null
         dev.deepseek.mobile.proxy.MihomoManager.stopWithAgentService()
@@ -3360,9 +3415,6 @@ class AgentService : Service() {
         question?.cancel()
         releaseWake()
         scope.cancel()
-        (webView.parent as? android.view.ViewGroup)?.removeView(webView)
-        webView.removeJavascriptInterface("Android")
-        webView.destroy()
         if (current === this) current = null
         AssistantState.ready = false
         AssistantState.activeTaskId = ""

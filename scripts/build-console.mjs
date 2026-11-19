@@ -10,7 +10,7 @@ await build({
   bundle: true,
   format: 'iife',
   platform: 'browser',
-  target: 'chrome120',
+  target: 'chrome84',
   minify: true,
 });
 for (const file of ['console.html', 'console.css'])

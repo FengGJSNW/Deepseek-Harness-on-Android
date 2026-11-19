@@ -69,7 +69,9 @@ await build({
   bundle: true,
   format: 'iife',
   globalName: 'MobileHarness',
-  target: 'chrome120',
+  // WeakRef is required for Cordis' lifecycle. Newer syntax must not prevent the
+  // runtime's capability checks and polyfills from running on these WebViews.
+  target: 'chrome84',
   platform: 'browser',
   nodePaths: [path.join(root, 'node_modules')],
   plugins: [resolver],
@@ -90,3 +92,7 @@ await build({
 );
 fs.copyFileSync(path.join(upstream, 'LICENSE'), path.join(output, 'HARNESS-LICENSE.txt'));
 fs.copyFileSync(path.join(root, 'node_modules/zod/LICENSE'), path.join(output, 'ZOD-LICENSE.txt'));
+fs.copyFileSync(
+  path.join(root, 'node_modules/core-js/LICENSE'),
+  path.join(output, 'CORE-JS-LICENSE.txt'),
+);

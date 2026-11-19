@@ -32,6 +32,13 @@ internal fun Composer(c: Conversation, onSend: () -> Unit) {
     LaunchedEffect(c.id, c.draft.isBlank()) { if (c.draft.isBlank()) preview = false }
     val busy = AssistantState.running?.sessionId == c.id
     ComposerFrame {
+        if (!AssistantState.ready && AssistantState.engineFailure.isNotEmpty())
+            Text(
+                AssistantState.engineFailure,
+                Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                fontSize = 12.sp,
+                color = WhaleMuted,
+            )
         if (c.creatorMode)
             Text(
                 "Creator · 插件创作",

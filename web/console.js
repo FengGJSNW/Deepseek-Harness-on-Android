@@ -1,5 +1,6 @@
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { observeLayout, afterFonts } from './page-layout.js';
 const sandbox = location.hash === '#sandbox';
 document.documentElement.classList.toggle('sandbox-console', sandbox);
 const terminal = new Terminal({
@@ -51,8 +52,8 @@ window.consoleKey = (key) => {
   terminal.focus();
   ConsoleNative.input(key);
 };
-new ResizeObserver(() => fit.fit()).observe(document.body);
-document.fonts.ready.then(() => {
+observeLayout(document.body, () => fit.fit());
+afterFonts(() => {
   fit.fit();
   ConsoleNative.ready();
 });

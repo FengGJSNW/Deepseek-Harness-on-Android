@@ -1,6 +1,7 @@
 import renderMathInElement from 'katex/contrib/auto-render';
 import { continuousCardPath } from './shape.js';
 import { uprightSegments } from './upright-symbols.js';
+import { observeLayout, afterFonts } from './page-layout.js';
 const article = document.getElementById('document');
 let frame;
 const measure = () => {
@@ -117,7 +118,7 @@ window.renderDocument = ({ html, size, line, family, weight, italic, ligatures }
     node.replaceWith(fragment);
   }
   measure();
-  document.fonts.ready.then(measure);
+  afterFonts(measure);
 };
 // Serialize only the selected DOM fragment. Never copy the full reply when a range is active.
 window.selectedMarkdown = () => {
@@ -145,7 +146,7 @@ window.selectedMarkdown = () => {
       if (!code) return '';
       const text = code.textContent.replace(/\n$/, '');
       const marker = fence(text, 3);
-      const lang = code.className.replace(/^language-/, '').replaceAll('`', '');
+      const lang = code.className.replace(/^language-/, '').replace(/`/g, '');
       return `\n\n${marker}${lang}\n${text}\n${marker}\n\n`;
     }
     if (node.matches('code')) {
@@ -173,7 +174,7 @@ window.selectedMarkdown = () => {
     if (tag === 'br') return ' '.repeat(2) + '\n';
     if (tag === 'hr') return '\n\n---\n\n';
     if (tag === 'p') return '\n\n' + content + '\n\n';
-    if (tag === 'li') return '- ' + content.trim().replaceAll('\n', '\n  ') + '\n';
+    if (tag === 'li') return '- ' + content.trim().replace(/\n/g, '\n  ') + '\n';
     if (tag === 'blockquote')
       return (
         '\n\n' +
@@ -206,5 +207,5 @@ document.addEventListener('click', (event) => {
     MathNative.open(link.getAttribute('href') || '');
   }
 });
-new ResizeObserver(measure).observe(article);
+observeLayout(article, measure);
 MathNative.ready();

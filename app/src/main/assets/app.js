@@ -11,8 +11,13 @@ function rpc(method, args = {}, signal) {
   const id = `r${++sequence}`;
   return new Promise((resolve, reject) => {
     const abort = () => {
-      Android.cancel(id);
-      pending.delete(id);
+      if (!pending.delete(id)) return;
+      try {
+        Android.cancel(id);
+      } catch {
+        reject(Error('已停止等待；未能确认设备端操作已取消'));
+        return;
+      }
       reject(Error('任务已停止'));
     };
     pending.set(id, {
@@ -21,7 +26,13 @@ function rpc(method, args = {}, signal) {
       cleanup: () => signal?.removeEventListener('abort', abort),
     });
     signal?.addEventListener('abort', abort, { once: true });
-    Android.request(id, method, JSON.stringify(args));
+    try {
+      Android.request(id, method, JSON.stringify(args));
+    } catch (error) {
+      pending.delete(id);
+      signal?.removeEventListener('abort', abort);
+      reject(error);
+    }
   });
 }
 window.nativeResolve = (r) => {
@@ -91,7 +102,22 @@ window.addEventListener('unhandledrejection', (e) => {
   publish('error', e.reason?.message || '操作失败');
 });
 (async () => {
-  await refreshStatus();
+  if (
+    typeof window.MobileHarness?.create !== 'function' ||
+    typeof window.MobileHarness?.createTeam !== 'function'
+  ) {
+    publish(
+      'engine_unavailable',
+      '消息引擎未能加载。请更新 Android System WebView 后在设置中重启消息引擎。',
+    );
+    return;
+  }
+  try {
+    await refreshStatus();
+  } catch {
+    publish('engine_unavailable', '无法连接手机上的消息服务，请在设置中重启消息引擎。');
+    return;
+  }
   window.appReady = true;
   publish('ready', true);
 })();

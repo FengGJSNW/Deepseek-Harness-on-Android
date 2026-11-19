@@ -1,6 +1,6 @@
 export { createTeam } from './team.ts';
 /** Android carrier of the unmodified upstream Cordis agent kernel. */
-import './polyfills.ts';
+import { assertKernelPlatform } from './polyfills.ts';
 import { indexUploadedImages } from './image-index.ts';
 import {
   workflowGuide,
@@ -683,6 +683,7 @@ const definitions: [string, string, Record<string, object>, string[]][] = [
 
 /** Mount official plugins, then register Android-specific tools beside them. */
 export async function create(rpc: Rpc, notify: Notify, config: any = {}) {
+  assertKernelPlatform();
   const terminalLevel = config.terminalEnabled
     ? JSON.parse(config.terminalConfig || '{}').level || 'sandbox'
     : '';

@@ -4,7 +4,7 @@ import vm from 'node:vm';
 import fs from 'node:fs';
 import { webcrypto } from 'node:crypto';
 
-function load() {
+function loadRealm({ legacy = false } = {}) {
   const sandbox = {
     console,
     crypto: webcrypto,
@@ -13,6 +13,9 @@ function load() {
     queueMicrotask,
     AbortController,
     AbortSignal,
+    DOMException,
+    Event,
+    EventTarget,
     TextEncoder,
     TextDecoder,
     structuredClone,
@@ -20,7 +23,29 @@ function load() {
     URL,
   };
   vm.createContext(sandbox);
-  // WebView 124 has Promise.withResolvers, but lacks resource-management symbols.
+  if (legacy) {
+    // Isolate host objects too: never delete methods on Node's own browser APIs.
+    sandbox.crypto = { getRandomValues: webcrypto.getRandomValues.bind(webcrypto) };
+    vm.runInContext(
+      `
+      delete Promise.withResolvers;
+      delete Object.hasOwn;
+      delete globalThis.AggregateError;
+      delete globalThis.structuredClone;
+      for (const key of ['at', 'with', 'toSpliced', 'toReversed', 'findLast']) delete Array.prototype[key];
+      globalThis.AbortSignal = class extends EventTarget { aborted = false; };
+      globalThis.AbortController = class {
+        signal = new AbortSignal();
+        abort() {
+          if (this.signal.aborted) return;
+          this.signal.aborted = true;
+          this.signal.dispatchEvent(new Event('abort'));
+        }
+      };`,
+      sandbox,
+    );
+  }
+  // Model WebViews without the resource-management symbols.
   vm.runInContext(
     `{
     const original = Symbol;
@@ -33,8 +58,92 @@ function load() {
     sandbox,
   );
   vm.runInContext(fs.readFileSync('app/src/main/assets/harness.js', 'utf8'), sandbox);
-  return sandbox.MobileHarness;
+  return sandbox;
 }
+
+function load(options) {
+  return loadRealm(options).MobileHarness;
+}
+
+test('a legacy WebView without Promise.withResolvers or newer session APIs sends the first message once', async () => {
+  const replies = [];
+  let requests = 0;
+  const agent = await load({ legacy: true }).create(
+    async (method) => {
+      if (method !== 'complete') return {};
+      requests++;
+      return { choices: [{ message: { content: 'received' }, finish_reason: 'stop' }] };
+    },
+    (type, value) => {
+      if (type === 'assistant') replies.push(value);
+    },
+    { access: 'none' },
+  );
+  try {
+    await agent.send('hello');
+    assert.deepEqual(replies, ['received']);
+    assert.equal(requests, 1);
+  } finally {
+    await agent.dispose();
+  }
+});
+
+test('legacy cancellation keeps the first reason even when multiple owners cancel', () => {
+  const realm = loadRealm({ legacy: true });
+  const { AbortController: Controller, AbortSignal: Signal } = realm;
+  const first = new Controller();
+  const second = new Controller();
+  const combined = Signal.any([first.signal, second.signal, first.signal]);
+  const nested = Signal.any([Signal.any([combined])]);
+  let notifications = 0;
+  combined.addEventListener('abort', () => notifications++);
+  const stop = Error('owner stopped this turn');
+  second.abort(stop);
+  first.abort(Error('later'));
+  assert.equal(notifications, 1);
+  assert.throws(
+    () => combined.throwIfAborted(),
+    (error) => error === stop,
+  );
+  assert.equal(Signal.any([second.signal]).reason, stop);
+  assert.equal(nested.reason, stop);
+  first.abort();
+  assert.notEqual(first.signal.reason, stop);
+  const defaultStop = new Controller();
+  defaultStop.abort();
+  assert.equal(defaultStop.signal.reason.name, 'AbortError');
+});
+
+test('legacy WebViews clone session snapshots faithfully and generate secure v4 IDs', () => {
+  const realm = loadRealm({ legacy: true });
+  const clone = vm.runInContext(
+    `(() => {
+    const record = { unchanged: undefined };
+    record.self = record;
+    const copy = structuredClone(record);
+    return copy !== record && copy.self === copy && Object.hasOwn(copy, 'unchanged');
+  })()`,
+    realm,
+  );
+  assert.ok(clone);
+  const id = realm.crypto.randomUUID();
+  assert.match(id, /^[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/);
+  assert.notEqual(realm.crypto.randomUUID(), id);
+});
+
+test('missing essential WebView capability fails before any bridge or provider request', async () => {
+  const realm = loadRealm();
+  vm.runInContext('delete globalThis.WeakRef', realm);
+  let requests = 0;
+  await assert.rejects(
+    realm.MobileHarness.create(
+      () => requests++,
+      () => {},
+    ),
+    /Android System WebView/,
+  );
+  assert.equal(requests, 0);
+});
 
 test('chat-only removes all execution tools and terminal stays independently opt-in', async () => {
   for (const config of [
@@ -356,7 +465,7 @@ test('official kernel executes tool results then finishes a turn', async () => {
   }
 });
 test('cancellation aborts the live provider request and admits no later tool', async () => {
-  const harness = load();
+  const harness = load({ legacy: true });
   let started;
   const ready = new Promise((resolve) => (started = resolve));
   const methods = [];
@@ -634,7 +743,7 @@ test('attachment identifiers survive session restore without journaling extracte
 });
 
 test('restoring a restored session repeatedly never leaves seed-marker holes', async () => {
-  const h = load();
+  const h = load({ legacy: true });
   const rpc = async (method) =>
     method === 'complete'
       ? { choices: [{ message: { content: 'continued' }, finish_reason: 'stop' }] }

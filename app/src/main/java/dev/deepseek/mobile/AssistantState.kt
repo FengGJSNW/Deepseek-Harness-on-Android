@@ -131,6 +131,7 @@ class PhoneTask(
 
 object AssistantState {
     var ready by mutableStateOf(false)
+    var engineFailure by mutableStateOf("")
     var configured by mutableStateOf(false)
     var accessibility by mutableStateOf(false)
     var showAccessibilityInfo by mutableStateOf(false)

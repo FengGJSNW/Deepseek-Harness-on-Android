@@ -10,7 +10,7 @@ await build({
   bundle: true,
   format: 'iife',
   platform: 'browser',
-  target: 'chrome120',
+  target: 'chrome84',
   minify: true,
 });
 for (const file of ['math.html', 'math.css'])
@@ -30,3 +30,7 @@ fs.copyFileSync(
   path.join(output, 'katex-LICENSE.txt'),
 );
 console.log('Packaged local KaTeX renderer and licensed fonts.');
+fs.copyFileSync(
+  path.join(root, 'node_modules/unicode-segmenter/LICENSE'),
+  path.join(output, 'unicode-segmenter-LICENSE.txt'),
+);
