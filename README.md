@@ -54,6 +54,12 @@
 - **扩展与工具**：支持按需安装和管理 Agent Skills、MCP 服务与 JavaScript 插件，也提供工作区文件、项目记忆及任务规划等工具；实际可用范围由用户授权与任务模式决定。
 - **集成 FlClash**：内置 FlClash 的代理、配置及 VPN 界面，并扩展 Agent 行为授权与 DSHA 的调用入口。应用还参考和移植了其 `prism_ui` 组件与交互动效。
 
+## 正在开发中的功能
+
+- **更多模型供应商支持**：增加对ChatGPT，Claude, Grok，Kimi等模型的支持，同时支持模型之间互相调用。
+- **Personal Data**：显示累计Token，模型用量信息等。
+- **Remote**：通过软件与插件的协同工作，实现远程监视控制电脑开发，类似Codex移动端控制Codex桌面端。
+
 ## 安装与镜像
 
 1. 从 [Releases](https://github.com/FengGJSNW/Deepseek-Harness-on-Android/releases) 下载 Release APK 并安装。应用支持 Android 11 及以上；本次 Release APK 为 ARM64 架构。
